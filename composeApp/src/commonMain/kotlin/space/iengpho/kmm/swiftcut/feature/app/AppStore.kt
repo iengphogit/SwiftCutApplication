@@ -4,17 +4,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.CoroutineScope
-import space.iengpho.kmm.swiftcut.Greeting
 import space.iengpho.kmm.swiftcut.core.mvi.CoroutineStore
 import space.iengpho.kmm.swiftcut.core.mvi.Store
+import space.iengpho.shared.schedule.model.ScheduleHighlight
 
-fun interface GreetingProvider {
-    suspend fun getGreeting(): String
+fun interface ScheduleHighlightProvider {
+    suspend fun getHighlight(): ScheduleHighlight
 }
 
 fun createAppStore(
     scope: CoroutineScope,
-    greetingProvider: GreetingProvider,
+    scheduleHighlightProvider: ScheduleHighlightProvider,
 ): Store<AppState, AppIntent> {
     return CoroutineStore(
         initialState = AppState(),
@@ -27,9 +27,9 @@ fun createAppStore(
         reducer = AppReducer,
         effectHandler = { effect ->
             when (effect) {
-                AppEffect.LoadGreeting -> {
-                    val greeting = greetingProvider.getGreeting()
-                    AppAction.GreetingLoaded(greeting)
+                AppEffect.LoadHighlight -> {
+                    val highlight = scheduleHighlightProvider.getHighlight()
+                    AppAction.HighlightLoaded(highlight)
                 }
             }
         },
@@ -38,13 +38,13 @@ fun createAppStore(
 
 @Composable
 fun rememberAppStore(
-    greetingProvider: GreetingProvider = remember { GreetingProvider { Greeting().greet() } },
+    scheduleHighlightProvider: ScheduleHighlightProvider,
 ): Store<AppState, AppIntent> {
     val scope = rememberCoroutineScope()
-    return remember(scope, greetingProvider) {
+    return remember(scope, scheduleHighlightProvider) {
         createAppStore(
             scope = scope,
-            greetingProvider = greetingProvider,
+            scheduleHighlightProvider = scheduleHighlightProvider,
         )
     }
 }

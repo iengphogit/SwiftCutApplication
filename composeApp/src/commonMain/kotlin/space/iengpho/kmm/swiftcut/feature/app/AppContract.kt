@@ -1,8 +1,10 @@
 package space.iengpho.kmm.swiftcut.feature.app
 
+import space.iengpho.shared.schedule.model.ScheduleHighlight
+
 data class AppState(
     val showContent: Boolean = false,
-    val greeting: String? = null,
+    val highlight: ScheduleHighlight? = null,
 )
 
 sealed interface AppIntent {

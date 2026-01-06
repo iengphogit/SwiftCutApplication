@@ -2,14 +2,15 @@ package space.iengpho.kmm.swiftcut.feature.app
 
 import space.iengpho.kmm.swiftcut.core.mvi.Next
 import space.iengpho.kmm.swiftcut.core.mvi.Reducer
+import space.iengpho.shared.schedule.model.ScheduleHighlight
 
 internal sealed interface AppAction {
     data object ToggleClicked : AppAction
-    data class GreetingLoaded(val greeting: String) : AppAction
+    data class HighlightLoaded(val highlight: ScheduleHighlight) : AppAction
 }
 
 internal sealed interface AppEffect {
-    data object LoadGreeting : AppEffect
+    data object LoadHighlight : AppEffect
 }
 
 internal object AppReducer : Reducer<AppState, AppAction, AppEffect> {
@@ -17,15 +18,15 @@ internal object AppReducer : Reducer<AppState, AppAction, AppEffect> {
         return when (action) {
             AppAction.ToggleClicked -> {
                 val nextShow = !state.showContent
-                val shouldLoadGreeting = nextShow && state.greeting == null
+                val shouldLoadContent = nextShow && state.highlight == null
                 Next(
                     state = state.copy(showContent = nextShow),
-                    effect = if (shouldLoadGreeting) AppEffect.LoadGreeting else null,
+                    effect = if (shouldLoadContent) AppEffect.LoadHighlight else null,
                 )
             }
 
-            is AppAction.GreetingLoaded -> {
-                Next(state = state.copy(greeting = action.greeting))
+            is AppAction.HighlightLoaded -> {
+                Next(state = state.copy(highlight = action.highlight))
             }
         }
     }
