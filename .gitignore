@@ -7,6 +7,7 @@
 .konan/
 .kotlin/
 **/build/
+build/
 
 # IntelliJ / Android Studio
 .idea/
@@ -14,7 +15,9 @@
 
 # Local machine config
 local.properties
+local.settings
 
 # iOS / Xcode
 **/DerivedData/
 *.xcuserstate
+**/xcuserdata/
