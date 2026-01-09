@@ -31,7 +31,21 @@ struct ContentView: View {
                         if let project = workspaceStore.project(withId: projectId) {
                             StudioScreen(
                                 project: project,
-                                onBack: { navigationPath.removeLast() }
+                                onBack: { navigationPath.removeLast() },
+                                onUpdateAspectRatio: { ratio in
+                                    workspaceStore.updateAspectRatio(
+                                        for: project.id,
+                                        aspectRatio: ratio
+                                    )
+                                },
+                                onUpdateUhdSettings: { resolution, frameRate, bitrate in
+                                    workspaceStore.updateUhdSettings(
+                                        for: project.id,
+                                        resolution: resolution,
+                                        frameRate: frameRate,
+                                        bitrate: bitrate
+                                    )
+                                }
                             )
                         }
                     }

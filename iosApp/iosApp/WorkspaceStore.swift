@@ -8,6 +8,10 @@ struct WorkspaceProject: Identifiable, Hashable {
     let createdAt: Date
     let mediaKind: MediaKind
     let projectNumber: Int
+    let aspectRatio: AspectRatio
+    let resolution: UhdResolution
+    let frameRate: UhdFrameRate
+    let bitrate: UhdBitrate
 
     var isVideo: Bool {
         mediaKind == .video
@@ -84,11 +88,62 @@ final class WorkspaceStore: ObservableObject {
             mediaUrl: mediaFileUrl,
             createdAt: Date(),
             mediaKind: payload.mediaKind,
-            projectNumber: nextNumber
+            projectNumber: nextNumber,
+            aspectRatio: .ratio16x9,
+            resolution: .p1080,
+            frameRate: .fps24,
+            bitrate: .mbps5
         )
         projects.insert(newProject, at: 0)
         saveWorkspace(projects)
         return newProject
+    }
+
+    func updateAspectRatio(for projectId: UUID, aspectRatio: AspectRatio) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else {
+            return
+        }
+        let project = projects[index]
+        let updatedProject = WorkspaceProject(
+            id: project.id,
+            name: project.name,
+            mediaUrl: project.mediaUrl,
+            createdAt: project.createdAt,
+            mediaKind: project.mediaKind,
+            projectNumber: project.projectNumber,
+            aspectRatio: aspectRatio,
+            resolution: project.resolution,
+            frameRate: project.frameRate,
+            bitrate: project.bitrate
+        )
+        projects[index] = updatedProject
+        saveWorkspace(projects)
+    }
+
+    func updateUhdSettings(
+        for projectId: UUID,
+        resolution: UhdResolution,
+        frameRate: UhdFrameRate,
+        bitrate: UhdBitrate
+    ) {
+        guard let index = projects.firstIndex(where: { $0.id == projectId }) else {
+            return
+        }
+        let project = projects[index]
+        let updatedProject = WorkspaceProject(
+            id: project.id,
+            name: project.name,
+            mediaUrl: project.mediaUrl,
+            createdAt: project.createdAt,
+            mediaKind: project.mediaKind,
+            projectNumber: project.projectNumber,
+            aspectRatio: project.aspectRatio,
+            resolution: resolution,
+            frameRate: frameRate,
+            bitrate: bitrate
+        )
+        projects[index] = updatedProject
+        saveWorkspace(projects)
     }
 
     func deleteProject(_ project: WorkspaceProject) {
@@ -157,7 +212,11 @@ final class WorkspaceStore: ObservableObject {
                 mediaUrl: mediaUrl,
                 createdAt: project.createdAt,
                 mediaKind: project.mediaKind,
-                projectNumber: project.projectNumber
+                projectNumber: project.projectNumber,
+                aspectRatio: project.aspectRatio,
+                resolution: project.resolution,
+                frameRate: project.frameRate,
+                bitrate: project.bitrate
             )
         }
         saveWorkspace(updatedProjects)
@@ -201,7 +260,11 @@ final class WorkspaceStore: ObservableObject {
                 mediaUrl: mediaUrl,
                 createdAt: project.createdAt,
                 mediaKind: mediaKind,
-                projectNumber: projectNumber
+                projectNumber: projectNumber,
+                aspectRatio: project.aspectRatio ?? .ratio16x9,
+                resolution: project.resolution ?? .p1080,
+                frameRate: project.frameRate ?? .fps24,
+                bitrate: project.bitrate ?? .mbps5
             )
         }
     }
@@ -215,7 +278,11 @@ final class WorkspaceStore: ObservableObject {
                 createdAt: $0.createdAt,
                 isVideo: $0.isVideo,
                 mediaKind: $0.mediaKind,
-                projectNumber: $0.projectNumber
+                projectNumber: $0.projectNumber,
+                aspectRatio: $0.aspectRatio,
+                resolution: $0.resolution,
+                frameRate: $0.frameRate,
+                bitrate: $0.bitrate
             )
         }
         let record = WorkspaceRecord(projects: records)
@@ -248,6 +315,51 @@ enum MediaKind: String, Codable {
     case audio
 }
 
+enum AspectRatio: String, Codable, CaseIterable, Hashable {
+    case ratio16x9 = "16:9"
+    case ratio9x16 = "9:16"
+    case ratio1x1 = "1:1"
+
+    var displayName: String {
+        rawValue
+    }
+}
+
+enum UhdResolution: String, Codable, CaseIterable, Hashable {
+    case p1080 = "1080P"
+    case k2 = "2K"
+    case k4 = "4K"
+    case k8 = "8K"
+
+    var displayName: String {
+        rawValue
+    }
+}
+
+enum UhdFrameRate: String, Codable, CaseIterable, Hashable {
+    case fps24 = "24"
+    case fps25 = "25"
+    case fps30 = "30"
+    case fps50 = "50"
+    case fps60 = "60"
+
+    var displayName: String {
+        rawValue
+    }
+}
+
+enum UhdBitrate: String, Codable, CaseIterable, Hashable {
+    case mbps5 = "5"
+    case mbps10 = "10"
+    case mbps20 = "20"
+    case mbps50 = "50"
+    case mbps100 = "100"
+
+    var displayName: String {
+        rawValue
+    }
+}
+
 private struct WorkspaceRecord: Codable {
     let projects: [ProjectRecord]
 }
@@ -260,4 +372,8 @@ private struct ProjectRecord: Codable {
     let isVideo: Bool?
     let mediaKind: MediaKind?
     let projectNumber: Int?
+    let aspectRatio: AspectRatio?
+    let resolution: UhdResolution?
+    let frameRate: UhdFrameRate?
+    let bitrate: UhdBitrate?
 }
