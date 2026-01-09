@@ -1,43 +1,106 @@
-import UIKit
 import SwiftUI
-import ComposeApp
-
-struct ComposeView: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> UIViewController {
-        MainViewControllerKt.MainViewController()
-    }
-
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
-}
 
 struct ContentView: View {
+    @StateObject private var workspaceStore = WorkspaceStore()
+    @State private var navigationPath = NavigationPath()
+    @State private var isMediaLibraryPresented = false
+    @State private var pendingProjectId: UUID?
+    @State private var isLoadingMediaLibrary = false
+
     var body: some View {
-        VStack(spacing: 16) {
-            ComposeView()
+        NavigationStack(path: $navigationPath) {
+            LauncherScreen(onStartNewProject: handleStartNewProject)
+                .navigationDestination(for: Route.self) { route in
+                    switch route {
+                    case .history:
+                        ProjectHistoryScreen(
+                            projects: workspaceStore.projects,
+                            onCreateNewProject: handleCreateNewProject,
+                            onOpenProject: { project in
+                                navigationPath.append(Route.studio(projectId: project.id))
+                            }
+                        )
+                    case .studio(let projectId):
+                        if let project = workspaceStore.project(withId: projectId) {
+                            StudioScreen(
+                                project: project,
+                                onBack: { navigationPath.removeLast() }
+                            )
+                        }
+                    }
+                }
+        }
+        .overlay {
+            if isLoadingMediaLibrary {
+                LoadingOverlay()
+            }
+        }
+        .fullScreenCover(
+            isPresented: $isMediaLibraryPresented,
+            onDismiss: handleLibraryDismissed
+        ) {
+            MediaLibraryScreen(
+                onCancel: { isMediaLibraryPresented = false },
+                onImport: handleImportPayload
+            )
+        }
+    }
+
+    private func handleStartNewProject() {
+        isLoadingMediaLibrary = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            isMediaLibraryPresented = true
+            isLoadingMediaLibrary = false
+        }
+    }
+
+    private func handleCreateNewProject() {
+        isLoadingMediaLibrary = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            isMediaLibraryPresented = true
+            isLoadingMediaLibrary = false
+        }
+    }
+
+    private func handleImportPayload(_ payload: MediaPayload) {
+        if let project = workspaceStore.createProject(from: payload) {
+            pendingProjectId = project.id
+            isMediaLibraryPresented = false
+        }
+    }
+
+    private func handleLibraryDismissed() {
+        guard let projectId = pendingProjectId else {
+            isLoadingMediaLibrary = false
+            return
+        }
+        pendingProjectId = nil
+        navigationPath.append(Route.studio(projectId: projectId))
+    }
+}
+
+private struct LoadingOverlay: View {
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35)
                 .ignoresSafeArea()
 
-            SharedScheduleHighlightView()
-                .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(spacing: 12) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                Text("Opening Library…")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+            }
+            .padding(20)
+            .background(Color.black.opacity(0.7))
+            .cornerRadius(16)
         }
     }
 }
 
-struct SharedScheduleHighlightView: View {
-    private let facade = SharedScheduleModule.shared.facade()
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Shared module on SwiftUI")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            Text(facade.highlightHeadline(limit: 2))
-                .font(.callout)
-        }
-        .background(Color(uiColor: .secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.bottom, 12)
-    }
+private enum Route: Hashable {
+    case history
+    case studio(projectId: UUID)
 }
-
-
