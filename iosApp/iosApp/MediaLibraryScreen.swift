@@ -13,7 +13,7 @@ struct MediaLibraryScreen: View {
     @State private var selectedTab: LibraryTab = .media
     @State private var mediaItems: [MediaLibraryItem] = []
     @State private var fileItems: [FileLibraryItem] = []
-    @State private var selectedMediaId: String?
+    @State private var selectedMediaId: UUID?
     @State private var selectedFileId: UUID?
     @State private var isFileImporterPresented = false
     @State private var fileImportContext: FileImportContext = .all
@@ -22,7 +22,6 @@ struct MediaLibraryScreen: View {
     @State private var selectedMediaFilter: MediaFilter = .recent
     @State private var isFilterMenuPresented = false
     @State private var photoAuthorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-    @State private var isLoadingMedia = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -97,19 +96,21 @@ struct MediaLibraryScreen: View {
             }
         }
         .onAppear {
-            refreshMediaIfNeeded()
-        }
-        .onChange(of: photoAuthorization) { _ in
-            refreshMediaIfNeeded()
+            loadCache()
         }
         .onChange(of: selectedMediaFilter) { _ in
-            refreshMediaIfNeeded()
+            if !filteredMediaItems.contains(where: { $0.id == selectedMediaId }) {
+                selectedMediaId = nil
+            }
         }
         .onChange(of: scenePhase) { newPhase in
             guard newPhase == .active else {
                 return
             }
             photoAuthorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            if hasPhotoAccess && mediaItems.isEmpty {
+                loadCache()
+            }
         }
     }
 
@@ -119,8 +120,8 @@ struct MediaLibraryScreen: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
 
-            if hasPhotoAccess {
-                if mediaItems.isEmpty && !isLoadingMedia {
+            if filteredMediaItems.isEmpty {
+                if hasPhotoAccess {
                     LibraryEmptyState(
                         iconName: "photo.on.rectangle",
                         title: "No Media Yet",
@@ -130,21 +131,21 @@ struct MediaLibraryScreen: View {
                         handleMediaAccessAction()
                     }
                 } else {
-                    LibraryGrid(
-                        items: mediaItems,
-                        selectedItemId: selectedMediaId,
-                        onSelect: { selectedMediaId = selectedMediaId == $0 ? nil : $0 }
-                    )
+                    LibraryEmptyState(
+                        iconName: "lock.shield",
+                        title: "Allow Photos Access",
+                        message: "SwiftCut needs access to your library to browse media.",
+                        actionTitle: mediaAccessActionTitle
+                    ) {
+                        handleMediaAccessAction()
+                    }
                 }
             } else {
-                LibraryEmptyState(
-                    iconName: "lock.shield",
-                    title: "Allow Photos Access",
-                    message: "SwiftCut needs access to your library to browse media.",
-                    actionTitle: mediaAccessActionTitle
-                ) {
-                    handleMediaAccessAction()
-                }
+                LibraryGrid(
+                    items: filteredMediaItems,
+                    selectedItemId: selectedMediaId,
+                    onSelect: { selectedMediaId = selectedMediaId == $0 ? nil : $0 }
+                )
             }
         }
     }
@@ -207,6 +208,21 @@ struct MediaLibraryScreen: View {
             return nil
         }
         return mediaItems.first { $0.id == selectedMediaId }
+    }
+
+    private var filteredMediaItems: [MediaLibraryItem] {
+        let filtered: [MediaLibraryItem]
+        switch selectedMediaFilter {
+        case .recent:
+            filtered = mediaItems
+        case .screenshots:
+            filtered = mediaItems.filter { $0.isScreenshot }
+        case .favorites:
+            filtered = mediaItems.filter { $0.isFavorite }
+        case .videos:
+            filtered = mediaItems.filter { $0.isVideo }
+        }
+        return filtered.sorted { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
     }
 
     private var selectedFileItem: FileLibraryItem? {
@@ -306,10 +322,8 @@ struct MediaLibraryScreen: View {
 
     private func handleMediaAccessAction() {
         switch photoAuthorization {
-        case .authorized:
-            refreshMediaIfNeeded()
-        case .limited:
-            presentLimitedLibraryPicker()
+        case .authorized, .limited:
+            isGalleryPickerPresented = true
         case .denied, .restricted:
             openSettings()
         case .notDetermined:
@@ -338,12 +352,13 @@ struct MediaLibraryScreen: View {
             guard let selectedMediaItem else {
                 return
             }
-            Task {
-                if let payload = await buildPayload(from: selectedMediaItem.asset) {
-                    await MainActor.run {
-                        onImport(payload)
-                    }
-                }
+            if let data = try? Data(contentsOf: selectedMediaItem.fileUrl) {
+                let payload = MediaPayload(
+                    data: data,
+                    fileExtension: selectedMediaItem.fileExtension,
+                    isVideo: selectedMediaItem.isVideo
+                )
+                onImport(payload)
             }
         case .audio, .files:
             guard let payload = selectedFileItem?.payload else {
@@ -359,6 +374,11 @@ struct MediaLibraryScreen: View {
             await MainActor.run {
                 photoAuthorization = status
             }
+            if status == .authorized || status == .limited {
+                await MainActor.run {
+                    loadCache()
+                }
+            }
             if status == .limited {
                 await MainActor.run {
                     presentLimitedLibraryPicker()
@@ -371,40 +391,47 @@ struct MediaLibraryScreen: View {
         }
     }
 
-    private func refreshMediaIfNeeded() {
-        guard hasPhotoAccess else {
-            return
-        }
-        isLoadingMedia = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let options = PHFetchOptions()
-            options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-            let fetchResult: PHFetchResult<PHAsset>
-            if let collection = selectedMediaFilter.collection {
-                fetchResult = PHAsset.fetchAssets(in: collection, options: options)
-            } else {
-                fetchResult = PHAsset.fetchAssets(with: options)
-            }
-            var updatedItems: [MediaLibraryItem] = []
-            fetchResult.enumerateObjects { asset, _, _ in
-                updatedItems.append(MediaLibraryItem(asset: asset))
-            }
-            DispatchQueue.main.async {
-                mediaItems = updatedItems
-                isLoadingMedia = false
-            }
-        }
-    }
-
     private func buildMediaItems(from items: [PhotosPickerItem]) async -> [MediaLibraryItem] {
         var results: [MediaLibraryItem] = []
         for item in items {
+            guard let data = try? await item.loadTransferable(type: Data.self) else {
+                continue
+            }
+            let contentType = item.supportedContentTypes.first
+            let isVideo = contentType?.conforms(to: .movie) == true || contentType?.conforms(to: .video) == true
+            let fileExtension = contentType?.preferredFilenameExtension
+                ?? (isVideo ? "mov" : "jpg")
+            let cachedUrl = cacheFile(data: data, fileExtension: fileExtension)
+            let normalizedExtension = cachedUrl.pathExtension.isEmpty
+                ? fileExtension.lowercased()
+                : cachedUrl.pathExtension.lowercased()
+            let duration = isVideo ? formatDuration(from: cachedUrl) : nil
+            var creationDate: Date? = nil
+            var isFavorite = false
+            var isScreenshot = false
             if let identifier = item.itemIdentifier {
                 let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
                 if let asset = fetch.firstObject {
-                    results.append(MediaLibraryItem(asset: asset))
+                    creationDate = asset.creationDate
+                    isFavorite = asset.isFavorite
+                    isScreenshot = asset.mediaSubtypes.contains(.photoScreenshot)
                 }
             }
+            if creationDate == nil {
+                creationDate = Date()
+            }
+            results.append(
+                MediaLibraryItem(
+                    id: UUID(),
+                    fileUrl: cachedUrl,
+                    fileExtension: normalizedExtension,
+                    isVideo: isVideo,
+                    duration: duration,
+                    creationDate: creationDate,
+                    isFavorite: isFavorite,
+                    isScreenshot: isScreenshot
+                )
+            )
         }
         return results
     }
@@ -419,22 +446,26 @@ struct MediaLibraryScreen: View {
             return
         }
         mediaItems.insert(contentsOf: newItems, at: 0)
+        saveCache()
     }
 
     private func handleFileImport(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            let additions = urls.compactMap { buildFileItem(from: $0) }
+            let additions = urls.compactMap { importFileItem(from: $0) }
             guard !additions.isEmpty else {
                 return
             }
-            fileItems.insert(contentsOf: additions, at: 0)
+            DispatchQueue.main.async {
+                fileItems.insert(contentsOf: additions, at: 0)
+                saveCache()
+            }
         case .failure:
             return
         }
     }
 
-    private func buildFileItem(from url: URL) -> FileLibraryItem? {
+    private func importFileItem(from url: URL) -> FileLibraryItem? {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         defer {
             if didStartAccessing {
@@ -442,6 +473,19 @@ struct MediaLibraryScreen: View {
             }
         }
 
+        guard let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+
+        let cachedUrl = cacheFile(data: data, fileExtension: url.pathExtension)
+        return buildFileItem(from: cachedUrl, displayName: url.lastPathComponent)
+    }
+
+    private func buildFileItem(
+        from url: URL,
+        displayName: String? = nil,
+        id: UUID? = nil
+    ) -> FileLibraryItem? {
         guard let data = try? Data(contentsOf: url) else {
             return nil
         }
@@ -469,69 +513,18 @@ struct MediaLibraryScreen: View {
         }
 
         return FileLibraryItem(
+            id: id ?? UUID(),
             payload: payload,
-            title: url.lastPathComponent,
+            title: displayName ?? url.lastPathComponent,
             detail: duration ?? sizeText,
             thumbnail: thumbnail,
             isVideo: isVideo,
             isAudio: isAudio,
             duration: duration,
             kindLabel: kindLabel,
-            iconName: iconName
+            iconName: iconName,
+            fileUrl: url
         )
-    }
-
-    private func buildPayload(from asset: PHAsset) async -> MediaPayload? {
-        switch asset.mediaType {
-        case .image:
-            return await buildImagePayload(from: asset)
-        case .video:
-            return await buildVideoPayload(from: asset)
-        default:
-            return nil
-        }
-    }
-
-    private func buildImagePayload(from asset: PHAsset) async -> MediaPayload? {
-        await withCheckedContinuation { continuation in
-            let options = PHImageRequestOptions()
-            options.isNetworkAccessAllowed = true
-            options.deliveryMode = .highQualityFormat
-            options.isSynchronous = false
-            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) {
-                data,
-                _,
-                _,
-                _ in
-                guard let data else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                let fileExtension = asset.fileExtension ?? "jpg"
-                continuation.resume(
-                    returning: MediaPayload(data: data, fileExtension: fileExtension, isVideo: false)
-                )
-            }
-        }
-    }
-
-    private func buildVideoPayload(from asset: PHAsset) async -> MediaPayload? {
-        await withCheckedContinuation { continuation in
-            let options = PHVideoRequestOptions()
-            options.isNetworkAccessAllowed = true
-            PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
-                guard let urlAsset = avAsset as? AVURLAsset,
-                      let data = try? Data(contentsOf: urlAsset.url)
-                else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                let fileExtension = urlAsset.url.pathExtension.isEmpty ? "mov" : urlAsset.url.pathExtension
-                continuation.resume(
-                    returning: MediaPayload(data: data, fileExtension: fileExtension, isVideo: true)
-                )
-            }
-        }
     }
 
     private func generateThumbnail(from url: URL, isVideo: Bool) -> UIImage? {
@@ -579,6 +572,97 @@ struct MediaLibraryScreen: View {
         } else {
             openSettings()
         }
+    }
+
+    private func cacheFile(data: Data, fileExtension: String) -> URL {
+        let baseUrl = cacheDirectoryUrl().appendingPathComponent("MediaLibraryFiles", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: baseUrl.path) {
+            try? FileManager.default.createDirectory(at: baseUrl, withIntermediateDirectories: true)
+        }
+        let fileExtensionValue = fileExtension.isEmpty ? "dat" : fileExtension.lowercased()
+        let fileUrl = baseUrl
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(fileExtensionValue)
+        try? data.write(to: fileUrl, options: .atomic)
+        return fileUrl
+    }
+
+    private func cacheDirectoryUrl() -> URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+    }
+
+    private func cacheFileUrl() -> URL {
+        cacheDirectoryUrl().appendingPathComponent("media-library-cache.json")
+    }
+
+    private func loadCache() {
+        guard let data = try? Data(contentsOf: cacheFileUrl()),
+              let cache = try? JSONDecoder().decode(MediaLibraryCache.self, from: data)
+        else {
+            return
+        }
+
+        let cachedMedia = cache.mediaItems.compactMap { item -> MediaLibraryItem? in
+            let fileUrl = URL(fileURLWithPath: item.filePath)
+            guard FileManager.default.fileExists(atPath: fileUrl.path) else {
+                return nil
+            }
+            let duration = item.duration ?? (item.isVideo ? formatDuration(from: fileUrl) : nil)
+            let fileExtension = item.fileExtension.isEmpty
+                ? fileUrl.pathExtension.lowercased()
+                : item.fileExtension
+            return MediaLibraryItem(
+                id: item.id,
+                fileUrl: fileUrl,
+                fileExtension: fileExtension,
+                isVideo: item.isVideo,
+                duration: duration,
+                creationDate: item.creationDate,
+                isFavorite: item.isFavorite,
+                isScreenshot: item.isScreenshot
+            )
+        }
+        mediaItems = cachedMedia
+
+        let cachedFiles = cache.fileItems.compactMap { item in
+            buildFileItem(
+                from: URL(fileURLWithPath: item.filePath),
+                displayName: item.title,
+                id: item.id
+            )
+        }
+        fileItems = cachedFiles
+    }
+
+    private func saveCache() {
+        let cache = MediaLibraryCache(
+            mediaItems: mediaItems.map {
+                MediaCacheItem(
+                    id: $0.id,
+                    filePath: $0.fileUrl.path,
+                    fileExtension: $0.fileExtension,
+                    isVideo: $0.isVideo,
+                    duration: $0.duration,
+                    creationDate: $0.creationDate,
+                    isFavorite: $0.isFavorite,
+                    isScreenshot: $0.isScreenshot
+                )
+            },
+            fileItems: fileItems.map {
+                FileCacheItem(
+                    id: $0.id,
+                    title: $0.title,
+                    filePath: $0.fileUrl.path,
+                    isVideo: $0.isVideo,
+                    isAudio: $0.isAudio
+                )
+            }
+        )
+        guard let data = try? JSONEncoder().encode(cache) else {
+            return
+        }
+        try? data.write(to: cacheFileUrl(), options: .atomic)
     }
 
     private func topViewController() -> UIViewController? {
@@ -723,8 +807,8 @@ private struct PermissionBanner: View {
 
 private struct LibraryGrid: View {
     let items: [MediaLibraryItem]
-    let selectedItemId: String?
-    var onSelect: (String) -> Void
+    let selectedItemId: UUID?
+    var onSelect: (UUID) -> Void
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 3)
 
@@ -757,7 +841,7 @@ private struct LibraryCell: View {
                     RoundedRectangle(cornerRadius: 10)
                         .fill(AppTheme.surfaceDark)
 
-                    MediaAssetThumbnailView(asset: item.asset, size: proxy.size)
+                    MediaFileThumbnailView(fileUrl: item.fileUrl, isVideo: item.isVideo, size: proxy.size)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
 
                     if let duration = item.duration {
@@ -792,8 +876,9 @@ private struct LibraryCell: View {
     }
 }
 
-private struct MediaAssetThumbnailView: View {
-    let asset: PHAsset
+private struct MediaFileThumbnailView: View {
+    let fileUrl: URL
+    let isVideo: Bool
     let size: CGSize
 
     @State private var thumbnail: UIImage?
@@ -811,31 +896,23 @@ private struct MediaAssetThumbnailView: View {
                     .fill(AppTheme.surfaceDark)
             }
         }
-        .task(id: "\(asset.localIdentifier)-\(Int(size.width))") {
-            thumbnail = await requestThumbnail()
+        .task(id: "\(fileUrl.lastPathComponent)-\(Int(size.width))") {
+            thumbnail = generateThumbnail()
         }
     }
 
-    private func requestThumbnail() async -> UIImage? {
-        let baseSize = max(size.width, 120)
-        let targetSize = CGSize(
-            width: baseSize * UIScreen.main.scale,
-            height: baseSize * UIScreen.main.scale
-        )
-        return await withCheckedContinuation { continuation in
-            let options = PHImageRequestOptions()
-            options.deliveryMode = .opportunistic
-            options.resizeMode = .fast
-            options.isNetworkAccessAllowed = true
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: targetSize,
-                contentMode: .aspectFill,
-                options: options
-            ) { image, _ in
-                continuation.resume(returning: image)
+    private func generateThumbnail() -> UIImage? {
+        if isVideo {
+            let asset = AVAsset(url: fileUrl)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            let time = CMTime(seconds: 0.1, preferredTimescale: 600)
+            guard let image = try? generator.copyCGImage(at: time, actualTime: nil) else {
+                return nil
             }
+            return UIImage(cgImage: image)
         }
+        return UIImage(contentsOfFile: fileUrl.path)
     }
 }
 
@@ -843,29 +920,20 @@ private struct FileSelectPanel: View {
     var onSelect: () -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
-            Button(action: onSelect) {
-                HStack(spacing: 10) {
-                    Image(systemName: "photo")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(AppTheme.accentBlue)
-                    Text("Select from Gallery")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(AppTheme.textPrimary)
-                }
-                .frame(maxWidth: .infinity, minHeight: 46)
-                .background(AppTheme.surface)
-                .cornerRadius(12)
+        Button(action: onSelect) {
+            HStack(spacing: 10) {
+                Image(systemName: "photo")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(AppTheme.accentBlue)
+                Text("Select from Gallery")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(AppTheme.textPrimary)
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, minHeight: 46)
+            .background(AppTheme.surface)
+            .cornerRadius(12)
         }
-        .padding(12)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(AppTheme.surfaceBorder, lineWidth: 1)
-        )
+        .buttonStyle(.plain)
     }
 }
 
@@ -1086,23 +1154,30 @@ private enum MediaFilter: String, CaseIterable, Identifiable {
         }
     }
 
-    var collection: PHAssetCollection? {
-        switch self {
-        case .recent:
-            return nil
-        case .screenshots:
-            return MediaFilter.fetchSmartAlbum(.smartAlbumScreenshots)
-        case .favorites:
-            return MediaFilter.fetchSmartAlbum(.smartAlbumFavorites)
-        case .videos:
-            return MediaFilter.fetchSmartAlbum(.smartAlbumVideos)
-        }
-    }
+}
 
-    private static func fetchSmartAlbum(_ subtype: PHAssetCollectionSubtype) -> PHAssetCollection? {
-        let collections = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: subtype, options: nil)
-        return collections.firstObject
-    }
+private struct MediaLibraryCache: Codable {
+    let mediaItems: [MediaCacheItem]
+    let fileItems: [FileCacheItem]
+}
+
+private struct MediaCacheItem: Codable {
+    let id: UUID
+    let filePath: String
+    let fileExtension: String
+    let isVideo: Bool
+    let duration: String?
+    let creationDate: Date?
+    let isFavorite: Bool
+    let isScreenshot: Bool
+}
+
+private struct FileCacheItem: Codable {
+    let id: UUID
+    let title: String
+    let filePath: String
+    let isVideo: Bool
+    let isAudio: Bool
 }
 
 private enum FileImportContext {
@@ -1120,32 +1195,18 @@ private enum FileImportContext {
 }
 
 private struct MediaLibraryItem: Identifiable {
-    let id: String
-    let asset: PHAsset
+    let id: UUID
+    let fileUrl: URL
+    let fileExtension: String
     let isVideo: Bool
     let duration: String?
-
-    init(asset: PHAsset) {
-        self.asset = asset
-        id = asset.localIdentifier
-        isVideo = asset.mediaType == .video
-        duration = asset.mediaType == .video
-            ? MediaLibraryItem.formatDuration(seconds: asset.duration)
-            : nil
-    }
-
-    private static func formatDuration(seconds: Double) -> String? {
-        guard seconds.isFinite else {
-            return nil
-        }
-        let minutes = Int(seconds) / 60
-        let remainingSeconds = Int(seconds) % 60
-        return String(format: "%d:%02d", minutes, remainingSeconds)
-    }
+    let creationDate: Date?
+    let isFavorite: Bool
+    let isScreenshot: Bool
 }
 
 private struct FileLibraryItem: Identifiable {
-    let id = UUID()
+    let id: UUID
     let payload: MediaPayload
     let title: String
     let detail: String
@@ -1155,16 +1216,7 @@ private struct FileLibraryItem: Identifiable {
     let duration: String?
     let kindLabel: String
     let iconName: String
-}
-
-private extension PHAsset {
-    var fileExtension: String? {
-        guard let filename = value(forKey: "filename") as? String else {
-            return nil
-        }
-        let fileExtension = URL(fileURLWithPath: filename).pathExtension
-        return fileExtension.isEmpty ? nil : fileExtension.lowercased()
-    }
+    let fileUrl: URL
 }
 
 #Preview {
