@@ -24,6 +24,7 @@ final class WorkspaceStore: ObservableObject {
 
     private let fileManager = FileManager.default
     private let workspaceFileName = "workspace.json"
+    private let legacyProjectsFolder = "Projects"
 
     func load() async {
         let workspaceUrl = workspaceFileUrl
@@ -34,7 +35,19 @@ final class WorkspaceStore: ObservableObject {
                 continuation.resume(returning: projects)
             }
         }
-        projects = loadedProjects
+        if loadedProjects.isEmpty {
+            migrateLegacyWorkspaceIfNeeded()
+            let migratedProjects = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    let projects = Self.loadWorkspace(from: self.workspaceFileUrl)
+                        .sorted { $0.createdAt > $1.createdAt }
+                    continuation.resume(returning: projects)
+                }
+            }
+            projects = migratedProjects
+        } else {
+            projects = loadedProjects
+        }
     }
 
     func project(withId id: UUID) -> WorkspaceProject? {
@@ -46,10 +59,15 @@ final class WorkspaceStore: ObservableObject {
         let projectCode = String(format: "%03d", nextNumber)
         let projectName = "Project \(projectCode)"
         let projectId = UUID()
-        let projectDirectory = projectsDirectoryUrl.appendingPathComponent(projectCode)
+        let projectDirectory = projectsDirectoryUrl.appendingPathComponent(Self.projectFolderName(for: nextNumber))
         let mediaFileUrl = projectDirectory.appendingPathComponent("media.\(payload.fileExtension)")
 
         do {
+            try fileManager.createDirectory(
+                at: projectsDirectoryUrl,
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
             try fileManager.createDirectory(
                 at: projectDirectory,
                 withIntermediateDirectories: true,
@@ -77,21 +95,23 @@ final class WorkspaceStore: ObservableObject {
         projects.removeAll { $0.id == project.id }
         saveWorkspace(projects)
         let projectDirectory = projectsDirectoryUrl
-            .appendingPathComponent(String(format: "%03d", project.projectNumber))
+            .appendingPathComponent(Self.projectFolderName(for: project.projectNumber))
         try? fileManager.removeItem(at: projectDirectory)
+        let legacyDirectory = projectsDirectoryUrl
+            .appendingPathComponent(String(format: "%03d", project.projectNumber))
+        try? fileManager.removeItem(at: legacyDirectory)
     }
 
-    private var cacheBaseUrl: URL {
-        fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
+    private var storageBaseUrl: URL {
+        Self.storageBaseUrl(fileManager: fileManager)
     }
 
     private var workspaceFileUrl: URL {
-        cacheBaseUrl.appendingPathComponent(workspaceFileName)
+        storageBaseUrl.appendingPathComponent(workspaceFileName)
     }
 
     private var projectsDirectoryUrl: URL {
-        cacheBaseUrl.appendingPathComponent("Projects")
+        storageBaseUrl.appendingPathComponent("Projects")
     }
 
     private func nextProjectNumber() -> Int {
@@ -99,6 +119,55 @@ final class WorkspaceStore: ObservableObject {
             { $0.projectNumber }
         ).max() ?? 0
         return currentMax + 1
+    }
+
+    private static func projectFolderName(for projectNumber: Int) -> String {
+        "Project \(String(format: "%03d", projectNumber))"
+    }
+
+    private func migrateLegacyWorkspaceIfNeeded() {
+        let legacyBaseUrl = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        let legacyWorkspaceUrl = legacyBaseUrl.appendingPathComponent(workspaceFileName)
+        let legacyProjectsUrl = legacyBaseUrl.appendingPathComponent(legacyProjectsFolder)
+        let legacyProjects = Self.loadWorkspace(from: legacyWorkspaceUrl)
+        guard !legacyProjects.isEmpty else {
+            return
+        }
+
+        try? fileManager.createDirectory(at: storageBaseUrl, withIntermediateDirectories: true)
+        try? fileManager.createDirectory(at: projectsDirectoryUrl, withIntermediateDirectories: true)
+
+        let updatedProjects = legacyProjects.map { project -> WorkspaceProject in
+            let projectFolder = String(format: "%03d", project.projectNumber)
+            let legacyProjectUrl = legacyProjectsUrl.appendingPathComponent(projectFolder)
+            let newProjectUrl = projectsDirectoryUrl
+                .appendingPathComponent(Self.projectFolderName(for: project.projectNumber))
+            if fileManager.fileExists(atPath: legacyProjectUrl.path),
+               !fileManager.fileExists(atPath: newProjectUrl.path) {
+                try? fileManager.moveItem(at: legacyProjectUrl, to: newProjectUrl)
+            }
+            let fileExtension = project.mediaUrl.pathExtension
+            let fallbackExtension = project.mediaKind == .video ? "mov" : project.mediaKind == .audio ? "m4a" : "jpg"
+            let mediaExtension = fileExtension.isEmpty ? fallbackExtension : fileExtension
+            let mediaUrl = newProjectUrl.appendingPathComponent("media.\(mediaExtension)")
+            return WorkspaceProject(
+                id: project.id,
+                name: project.name,
+                mediaUrl: mediaUrl,
+                createdAt: project.createdAt,
+                mediaKind: project.mediaKind,
+                projectNumber: project.projectNumber
+            )
+        }
+        saveWorkspace(updatedProjects)
+        try? fileManager.removeItem(at: legacyWorkspaceUrl)
+    }
+
+    private static func storageBaseUrl(fileManager: FileManager) -> URL {
+        let baseUrl = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        return baseUrl.appendingPathComponent("SwiftCut", isDirectory: true)
     }
 
     private static func loadWorkspace(from url: URL) -> [WorkspaceProject] {
@@ -114,10 +183,22 @@ final class WorkspaceStore: ObservableObject {
             let projectNumber = project.projectNumber
                 ?? Int(project.name.components(separatedBy: CharacterSet.decimalDigits.inverted).joined())
                 ?? 0
+            let storageBaseUrl = Self.storageBaseUrl(fileManager: FileManager.default)
+            let projectsDirectoryUrl = storageBaseUrl.appendingPathComponent("Projects")
+            let fileExtension = URL(fileURLWithPath: project.mediaPath).pathExtension
+            let fallbackExtension = mediaKind == .video ? "mov" : mediaKind == .audio ? "m4a" : "jpg"
+            let mediaExtension = fileExtension.isEmpty ? fallbackExtension : fileExtension
+            let fallbackUrl = projectsDirectoryUrl
+                .appendingPathComponent(Self.projectFolderName(for: projectNumber))
+                .appendingPathComponent("media.\(mediaExtension)")
+            let existingUrl = URL(fileURLWithPath: project.mediaPath)
+            let mediaUrl = FileManager.default.fileExists(atPath: existingUrl.path)
+                ? existingUrl
+                : fallbackUrl
             return WorkspaceProject(
                 id: project.id,
                 name: project.name,
-                mediaUrl: URL(fileURLWithPath: project.mediaPath),
+                mediaUrl: mediaUrl,
                 createdAt: project.createdAt,
                 mediaKind: mediaKind,
                 projectNumber: projectNumber
@@ -141,6 +222,7 @@ final class WorkspaceStore: ObservableObject {
         guard let data = try? JSONEncoder().encode(record) else {
             return
         }
+        try? fileManager.createDirectory(at: storageBaseUrl, withIntermediateDirectories: true)
         try? data.write(to: workspaceFileUrl, options: .atomic)
     }
 

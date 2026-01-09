@@ -596,51 +596,51 @@ struct MediaLibraryScreen: View {
     }
 
     private func cacheDirectoryUrl() -> URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        let baseUrl = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
+        return baseUrl.appendingPathComponent("SwiftCut", isDirectory: true)
     }
 
     private func cacheFileUrl() -> URL {
-        cacheDirectoryUrl().appendingPathComponent("MediaLibraryHistory.json")
+        cacheDirectoryUrl().appendingPathComponent("MediaLibrary.json")
+    }
+
+    private func legacyCacheFileUrls() -> [URL] {
+        let legacyBaseUrl = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return [
+            cacheDirectoryUrl().appendingPathComponent("media-library-cache.json"),
+            legacyBaseUrl.appendingPathComponent("MediaLibraryHistory.json"),
+            legacyBaseUrl.appendingPathComponent("media-library-cache.json"),
+        ]
     }
 
     private func loadCache() {
-        guard let data = try? Data(contentsOf: cacheFileUrl()),
-              let cache = try? JSONDecoder().decode(MediaLibraryCache.self, from: data)
-        else {
+        let cacheUrl = cacheFileUrl()
+        let data: Data?
+        if let currentData = try? Data(contentsOf: cacheUrl) {
+            data = currentData
+        } else {
+            let legacyData = legacyCacheFileUrls().compactMap { try? Data(contentsOf: $0) }.first
+            data = legacyData
+            if let legacyData {
+                try? FileManager.default.createDirectory(at: cacheDirectoryUrl(), withIntermediateDirectories: true)
+                try? legacyData.write(to: cacheUrl, options: .atomic)
+            }
+        }
+
+        guard let loadedData = data else {
             return
         }
 
-        let cachedMedia = cache.mediaItems.compactMap { item -> MediaLibraryItem? in
-            let fileUrl = URL(fileURLWithPath: item.filePath)
-            guard FileManager.default.fileExists(atPath: fileUrl.path) else {
-                return nil
-            }
-            let duration = item.duration ?? (item.isVideo ? formatDuration(from: fileUrl) : nil)
-            let fileExtension = item.fileExtension.isEmpty
-                ? fileUrl.pathExtension.lowercased()
-                : item.fileExtension
-            return MediaLibraryItem(
-                id: item.id,
-                fileUrl: fileUrl,
-                fileExtension: fileExtension,
-                isVideo: item.isVideo,
-                duration: duration,
-                creationDate: item.creationDate,
-                isFavorite: item.isFavorite,
-                isScreenshot: item.isScreenshot
-            )
+        if let cache = try? JSONDecoder().decode(MediaLibraryCache.self, from: loadedData) {
+            applyCache(cache)
+            return
         }
-        mediaItems = cachedMedia
 
-        let cachedFiles = cache.fileItems.compactMap { item in
-            buildFileItem(
-                from: URL(fileURLWithPath: item.filePath),
-                displayName: item.title,
-                id: item.id
-            )
+        if let legacyCache = try? JSONDecoder().decode(LegacyMediaLibraryCache.self, from: loadedData) {
+            applyLegacyCache(legacyCache)
         }
-        fileItems = cachedFiles
     }
 
     private func saveCache() {
@@ -670,7 +670,181 @@ struct MediaLibraryScreen: View {
         guard let data = try? JSONEncoder().encode(cache) else {
             return
         }
+        try? FileManager.default.createDirectory(at: cacheDirectoryUrl(), withIntermediateDirectories: true)
         try? data.write(to: cacheFileUrl(), options: .atomic)
+    }
+
+    private func applyCache(_ cache: MediaLibraryCache) {
+        var didMigrate = false
+        let cachedMedia = cache.mediaItems.compactMap { item -> MediaLibraryItem? in
+            guard let fileUrl = migrateMediaFileIfNeeded(filePath: item.filePath) else {
+                return nil
+            }
+            if fileUrl.path != item.filePath {
+                didMigrate = true
+            }
+            let duration = item.duration ?? (item.isVideo ? formatDuration(from: fileUrl) : nil)
+            let fileExtension = item.fileExtension.isEmpty
+                ? fileUrl.pathExtension.lowercased()
+                : item.fileExtension
+            return MediaLibraryItem(
+                id: item.id,
+                fileUrl: fileUrl,
+                fileExtension: fileExtension,
+                isVideo: item.isVideo,
+                duration: duration,
+                creationDate: item.creationDate,
+                isFavorite: item.isFavorite,
+                isScreenshot: item.isScreenshot
+            )
+        }
+        mediaItems = cachedMedia
+
+        let cachedFiles: [FileLibraryItem] = cache.fileItems.compactMap { item in
+            guard let fileUrl = migrateMediaFileIfNeeded(filePath: item.filePath) else {
+                return nil
+            }
+            if fileUrl.path != item.filePath {
+                didMigrate = true
+            }
+            return buildFileItem(
+                from: fileUrl,
+                displayName: item.title,
+                id: item.id
+            )
+        }
+        fileItems = cachedFiles
+
+        if didMigrate {
+            saveCache()
+        }
+    }
+
+    private func applyLegacyCache(_ cache: LegacyMediaLibraryCache) {
+        let cachedFiles: [FileLibraryItem] = cache.fileItems.compactMap { item in
+            guard let fileUrl = migrateMediaFileIfNeeded(filePath: item.filePath) else {
+                return nil
+            }
+            return buildFileItem(
+                from: fileUrl,
+                displayName: item.title,
+                id: item.id
+            )
+        }
+        fileItems = cachedFiles
+
+        let legacyMediaItems = rebuildMediaFromLegacyIdentifiers(cache.mediaIdentifiers)
+        if !legacyMediaItems.isEmpty {
+            mediaItems = legacyMediaItems
+            saveCache()
+        }
+    }
+
+    private func rebuildMediaFromLegacyIdentifiers(_ identifiers: [String]) -> [MediaLibraryItem] {
+        guard hasPhotoAccess, !identifiers.isEmpty else {
+            return []
+        }
+        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+        var rebuiltItems: [MediaLibraryItem] = []
+        fetch.enumerateObjects { asset, _, _ in
+            if let mediaItem = rebuildMediaItem(from: asset) {
+                rebuiltItems.append(mediaItem)
+            }
+        }
+        return rebuiltItems
+    }
+
+    private func rebuildMediaItem(from asset: PHAsset) -> MediaLibraryItem? {
+        switch asset.mediaType {
+        case .image:
+            return rebuildImageItem(from: asset)
+        case .video:
+            return rebuildVideoItem(from: asset)
+        default:
+            return nil
+        }
+    }
+
+    private func rebuildImageItem(from asset: PHAsset) -> MediaLibraryItem? {
+        let options = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .highQualityFormat
+        options.isSynchronous = true
+        var imageData: Data?
+        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) {
+            data, _, _, _ in
+            imageData = data
+        }
+        guard let data = imageData else {
+            return nil
+        }
+        let filename = asset.value(forKey: "filename") as? String
+        let fileExtension = URL(fileURLWithPath: filename ?? "").pathExtension
+        let cachedUrl = cacheFile(data: data, fileExtension: fileExtension.isEmpty ? "jpg" : fileExtension)
+        return MediaLibraryItem(
+            id: UUID(),
+            fileUrl: cachedUrl,
+            fileExtension: cachedUrl.pathExtension.lowercased(),
+            isVideo: false,
+            duration: nil,
+            creationDate: asset.creationDate,
+            isFavorite: asset.isFavorite,
+            isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot)
+        )
+    }
+
+    private func rebuildVideoItem(from asset: PHAsset) -> MediaLibraryItem? {
+        let options = PHVideoRequestOptions()
+        options.isNetworkAccessAllowed = true
+        let semaphore = DispatchSemaphore(value: 0)
+        var output: MediaLibraryItem?
+
+        PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
+            defer { semaphore.signal() }
+            guard let urlAsset = avAsset as? AVURLAsset,
+                  let data = try? Data(contentsOf: urlAsset.url)
+            else {
+                return
+            }
+            let fileExtension = urlAsset.url.pathExtension.isEmpty ? "mov" : urlAsset.url.pathExtension
+            let cachedUrl = cacheFile(data: data, fileExtension: fileExtension)
+            output = MediaLibraryItem(
+                id: UUID(),
+                fileUrl: cachedUrl,
+                fileExtension: cachedUrl.pathExtension.lowercased(),
+                isVideo: true,
+                duration: formatDuration(from: cachedUrl),
+                creationDate: asset.creationDate,
+                isFavorite: asset.isFavorite,
+                isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot)
+            )
+        }
+
+        _ = semaphore.wait(timeout: .now() + 2.0)
+        return output
+    }
+
+    private func migrateMediaFileIfNeeded(filePath: String) -> URL? {
+        let originalUrl = URL(fileURLWithPath: filePath)
+        if FileManager.default.fileExists(atPath: originalUrl.path) {
+            return originalUrl
+        }
+
+        let legacyBaseUrl = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let legacyDirectory = legacyBaseUrl.appendingPathComponent("MediaLibraryFiles", isDirectory: true)
+        let legacyFileUrl = legacyDirectory.appendingPathComponent(originalUrl.lastPathComponent)
+        guard FileManager.default.fileExists(atPath: legacyFileUrl.path) else {
+            return nil
+        }
+
+        let destinationDirectory = cacheDirectoryUrl().appendingPathComponent("MediaLibraryFiles", isDirectory: true)
+        try? FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+        let destinationUrl = destinationDirectory.appendingPathComponent(originalUrl.lastPathComponent)
+        if !FileManager.default.fileExists(atPath: destinationUrl.path) {
+            try? FileManager.default.copyItem(at: legacyFileUrl, to: destinationUrl)
+        }
+        return destinationUrl
     }
 
     private func topViewController() -> UIViewController? {
@@ -1186,6 +1360,11 @@ private struct FileCacheItem: Codable {
     let filePath: String
     let isVideo: Bool
     let isAudio: Bool
+}
+
+private struct LegacyMediaLibraryCache: Codable {
+    let mediaIdentifiers: [String]
+    let fileItems: [FileCacheItem]
 }
 
 private enum FileImportContext {

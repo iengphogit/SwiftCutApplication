@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @StateObject private var workspaceStore = WorkspaceStore()
@@ -23,7 +24,7 @@ struct ContentView: View {
                             onOpenProject: { project in
                                 navigationPath.append(Route.studio(projectId: project.id))
                             },
-                            onExit: { navigationPath.removeLast() },
+                            onExit: handleExitApp,
                             onDeleteProject: handleDeleteProject
                         )
                     case .studio(let projectId):
@@ -112,6 +113,13 @@ struct ContentView: View {
 
     private func handleDeleteProject(_ project: WorkspaceProject) {
         workspaceStore.deleteProject(project)
+    }
+
+    private func handleExitApp() {
+        UIApplication.shared.perform(#selector(NSXPCConnection.suspend))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            exit(0)
+        }
     }
 }
 

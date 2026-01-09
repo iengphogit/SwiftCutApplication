@@ -74,16 +74,17 @@ private struct HeaderBar: View {
     var body: some View {
         HStack {
             HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 10)
+                RoundedRectangle(cornerRadius: 12)
                     .fill(AppTheme.accentRed)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 40, height: 40)
+                    .shadow(color: AppTheme.neonLight.opacity(0.35), radius: 10, y: 6)
                     .overlay(
                         Image(systemName: "film")
                             .foregroundColor(.white)
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.system(size: 18, weight: .semibold))
                     )
                 Text("SwiftCut")
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.system(size: 20, weight: .bold))
                     .foregroundColor(AppTheme.textPrimary)
             }
 
@@ -166,6 +167,12 @@ private struct ProjectHistoryRow: View {
 
     @State private var durationText: String?
     @State private var isOptionsPresented = false
+
+    private let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
 
     var body: some View {
         HStack(spacing: 12) {
@@ -264,12 +271,12 @@ private struct ProjectHistoryRow: View {
 
     private var durationOverlay: some View {
         Group {
-            if let durationText {
+            if let badgeText {
                 VStack {
                     Spacer()
                     HStack {
                         Spacer()
-                        Text(durationText)
+                        Text(badgeText)
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundColor(.white)
                             .padding(.horizontal, 6)
@@ -281,5 +288,12 @@ private struct ProjectHistoryRow: View {
                 .padding(6)
             }
         }
+    }
+
+    private var badgeText: String? {
+        if project.isVideo || project.isAudio {
+            return durationText ?? dateFormatter.string(from: project.createdAt)
+        }
+        return nil
     }
 }
