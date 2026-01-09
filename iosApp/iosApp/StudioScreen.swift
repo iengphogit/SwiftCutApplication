@@ -82,7 +82,7 @@ struct StudioScreen: View {
                 DividerLine()
                     .padding(.top, 12)
 
-                MediaPreview(project: project)
+                MediaPreview(project: project, aspectRatio: selectedRatio)
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
                     .frame(maxHeight: 320)
@@ -281,6 +281,17 @@ private struct StepSelectorRow<Option: Hashable>: View {
 }
 
 private extension AspectRatio {
+    var ratioValue: CGFloat {
+        switch self {
+        case .ratio16x9:
+            return 16.0 / 9.0
+        case .ratio9x16:
+            return 9.0 / 16.0
+        case .ratio1x1:
+            return 1.0
+        }
+    }
+
     var iconSize: CGSize {
         switch self {
         case .ratio16x9:
@@ -396,6 +407,7 @@ private struct HeaderOptionButton: View {
 
 private struct MediaPreview: View {
     let project: WorkspaceProject
+    let aspectRatio: AspectRatio
 
     var body: some View {
         ZStack {
@@ -428,6 +440,8 @@ private struct MediaPreview: View {
                     .foregroundColor(.white.opacity(0.6))
             }
         }
+        .frame(maxWidth: .infinity)
+        .aspectRatio(aspectRatio.ratioValue, contentMode: .fit)
     }
 }
 
