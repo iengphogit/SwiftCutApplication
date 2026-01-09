@@ -356,7 +356,7 @@ struct MediaLibraryScreen: View {
                 let payload = MediaPayload(
                     data: data,
                     fileExtension: selectedMediaItem.fileExtension,
-                    isVideo: selectedMediaItem.isVideo
+                    mediaKind: selectedMediaItem.isVideo ? .video : .image
                 )
                 onImport(payload)
             }
@@ -494,7 +494,15 @@ struct MediaLibraryScreen: View {
         let fileType = UTType(filenameExtension: fileExtension)
         let isVideo = fileType?.conforms(to: .movie) == true || fileType?.conforms(to: .video) == true
         let isAudio = fileType?.conforms(to: .audio) == true
-        let payload = MediaPayload(data: data, fileExtension: fileExtension, isVideo: isVideo)
+        let mediaKind: MediaKind
+        if isVideo {
+            mediaKind = .video
+        } else if isAudio {
+            mediaKind = .audio
+        } else {
+            mediaKind = .image
+        }
+        let payload = MediaPayload(data: data, fileExtension: fileExtension, mediaKind: mediaKind)
         let thumbnail = generateThumbnail(from: url, isVideo: isVideo)
         let sizeText = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
         let duration = isVideo ? formatDuration(from: url) : nil
@@ -593,7 +601,7 @@ struct MediaLibraryScreen: View {
     }
 
     private func cacheFileUrl() -> URL {
-        cacheDirectoryUrl().appendingPathComponent("media-library-cache.json")
+        cacheDirectoryUrl().appendingPathComponent("MediaLibraryHistory.json")
     }
 
     private func loadCache() {

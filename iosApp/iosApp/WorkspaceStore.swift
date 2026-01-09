@@ -6,7 +6,16 @@ struct WorkspaceProject: Identifiable, Hashable {
     let name: String
     let mediaUrl: URL
     let createdAt: Date
-    let isVideo: Bool
+    let mediaKind: MediaKind
+    let projectNumber: Int
+
+    var isVideo: Bool {
+        mediaKind == .video
+    }
+
+    var isAudio: Bool {
+        mediaKind == .audio
+    }
 }
 
 @MainActor
@@ -33,9 +42,11 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func createProject(from payload: MediaPayload) -> WorkspaceProject? {
-        let projectName = "Project \(projects.count + 1)"
+        let nextNumber = nextProjectNumber()
+        let projectCode = String(format: "%03d", nextNumber)
+        let projectName = "Project \(projectCode)"
         let projectId = UUID()
-        let projectDirectory = projectsDirectoryUrl.appendingPathComponent(projectId.uuidString)
+        let projectDirectory = projectsDirectoryUrl.appendingPathComponent(projectCode)
         let mediaFileUrl = projectDirectory.appendingPathComponent("media.\(payload.fileExtension)")
 
         do {
@@ -54,11 +65,20 @@ final class WorkspaceStore: ObservableObject {
             name: projectName,
             mediaUrl: mediaFileUrl,
             createdAt: Date(),
-            isVideo: payload.isVideo
+            mediaKind: payload.mediaKind,
+            projectNumber: nextNumber
         )
         projects.insert(newProject, at: 0)
         saveWorkspace(projects)
         return newProject
+    }
+
+    func deleteProject(_ project: WorkspaceProject) {
+        projects.removeAll { $0.id == project.id }
+        saveWorkspace(projects)
+        let projectDirectory = projectsDirectoryUrl
+            .appendingPathComponent(String(format: "%03d", project.projectNumber))
+        try? fileManager.removeItem(at: projectDirectory)
     }
 
     private var cacheBaseUrl: URL {
@@ -74,6 +94,13 @@ final class WorkspaceStore: ObservableObject {
         cacheBaseUrl.appendingPathComponent("Projects")
     }
 
+    private func nextProjectNumber() -> Int {
+        let currentMax = projects.map(
+            { $0.projectNumber }
+        ).max() ?? 0
+        return currentMax + 1
+    }
+
     private static func loadWorkspace(from url: URL) -> [WorkspaceProject] {
         guard
             let data = try? Data(contentsOf: url),
@@ -82,12 +109,18 @@ final class WorkspaceStore: ObservableObject {
             return []
         }
         return record.projects.compactMap { project in
-            WorkspaceProject(
+            let mediaKind = project.mediaKind
+                ?? (project.isVideo == true ? .video : .image)
+            let projectNumber = project.projectNumber
+                ?? Int(project.name.components(separatedBy: CharacterSet.decimalDigits.inverted).joined())
+                ?? 0
+            return WorkspaceProject(
                 id: project.id,
                 name: project.name,
                 mediaUrl: URL(fileURLWithPath: project.mediaPath),
                 createdAt: project.createdAt,
-                isVideo: project.isVideo
+                mediaKind: mediaKind,
+                projectNumber: projectNumber
             )
         }
     }
@@ -99,7 +132,9 @@ final class WorkspaceStore: ObservableObject {
                 name: $0.name,
                 mediaPath: $0.mediaUrl.path,
                 createdAt: $0.createdAt,
-                isVideo: $0.isVideo
+                isVideo: $0.isVideo,
+                mediaKind: $0.mediaKind,
+                projectNumber: $0.projectNumber
             )
         }
         let record = WorkspaceRecord(projects: records)
@@ -114,7 +149,21 @@ final class WorkspaceStore: ObservableObject {
 struct MediaPayload {
     let data: Data
     let fileExtension: String
-    let isVideo: Bool
+    let mediaKind: MediaKind
+
+    var isVideo: Bool {
+        mediaKind == .video
+    }
+
+    var isAudio: Bool {
+        mediaKind == .audio
+    }
+}
+
+enum MediaKind: String, Codable {
+    case image
+    case video
+    case audio
 }
 
 private struct WorkspaceRecord: Codable {
@@ -126,5 +175,7 @@ private struct ProjectRecord: Codable {
     let name: String
     let mediaPath: String
     let createdAt: Date
-    let isVideo: Bool
+    let isVideo: Bool?
+    let mediaKind: MediaKind?
+    let projectNumber: Int?
 }

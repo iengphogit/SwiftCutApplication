@@ -79,6 +79,15 @@ private struct MediaPreview: View {
             if project.isVideo {
                 VideoPlayer(player: AVPlayer(url: project.mediaUrl))
                     .clipShape(RoundedRectangle(cornerRadius: 16))
+            } else if project.isAudio {
+                VStack(spacing: 12) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 48, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.8))
+                    Text("Audio Track")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                }
             } else if let image = UIImage(contentsOfFile: project.mediaUrl.path) {
                 Image(uiImage: image)
                     .resizable()

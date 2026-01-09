@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LauncherScreen: View {
     var onStartNewProject: () -> Void = {}
+    var onOpenHistory: () -> Void = {}
 
     private let features: [Feature] = [
         Feature(title: "Frame Precision", symbol: "viewfinder"),
@@ -52,6 +53,9 @@ struct LauncherScreen: View {
                     .padding(.bottom, 32)
                 }
             }
+        }
+        .onAppear {
+            onOpenHistory()
         }
     }
 }

@@ -6,10 +6,14 @@ struct ContentView: View {
     @State private var isMediaLibraryPresented = false
     @State private var pendingProjectId: UUID?
     @State private var isLoadingMediaLibrary = false
+    @State private var isShowingSplash = true
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            LauncherScreen(onStartNewProject: handleStartNewProject)
+            LauncherScreen(
+                onStartNewProject: handleStartNewProject,
+                onOpenHistory: handleOpenHistoryIfNeeded
+            )
                 .navigationDestination(for: Route.self) { route in
                     switch route {
                     case .history:
@@ -18,7 +22,9 @@ struct ContentView: View {
                             onCreateNewProject: handleCreateNewProject,
                             onOpenProject: { project in
                                 navigationPath.append(Route.studio(projectId: project.id))
-                            }
+                            },
+                            onExit: { navigationPath.removeLast() },
+                            onDeleteProject: handleDeleteProject
                         )
                     case .studio(let projectId):
                         if let project = workspaceStore.project(withId: projectId) {
@@ -35,6 +41,19 @@ struct ContentView: View {
                 LoadingOverlay()
             }
         }
+        .overlay {
+            if isShowingSplash {
+                SplashScreen()
+            }
+        }
+        .task {
+            await workspaceStore.load()
+            if !workspaceStore.projects.isEmpty {
+                navigationPath.append(Route.history)
+            }
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            isShowingSplash = false
+        }
         .fullScreenCover(
             isPresented: $isMediaLibraryPresented,
             onDismiss: handleLibraryDismissed
@@ -47,6 +66,10 @@ struct ContentView: View {
     }
 
     private func handleStartNewProject() {
+        guard workspaceStore.projects.isEmpty else {
+            navigationPath.append(Route.history)
+            return
+        }
         isLoadingMediaLibrary = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             isMediaLibraryPresented = true
@@ -59,6 +82,15 @@ struct ContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             isMediaLibraryPresented = true
             isLoadingMediaLibrary = false
+        }
+    }
+
+    private func handleOpenHistoryIfNeeded() {
+        guard navigationPath.isEmpty else {
+            return
+        }
+        if !workspaceStore.projects.isEmpty, !isShowingSplash {
+            navigationPath.append(Route.history)
         }
     }
 
@@ -76,6 +108,10 @@ struct ContentView: View {
         }
         pendingProjectId = nil
         navigationPath.append(Route.studio(projectId: projectId))
+    }
+
+    private func handleDeleteProject(_ project: WorkspaceProject) {
+        workspaceStore.deleteProject(project)
     }
 }
 

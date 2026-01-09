@@ -15,7 +15,7 @@ struct MediaThumbnailView: View {
                     .scaledToFill()
             } else {
                 AppTheme.surfaceDark
-                Image(systemName: project.isVideo ? "video" : "photo")
+                Image(systemName: placeholderIcon)
                     .foregroundColor(AppTheme.textSecondary)
             }
         }
@@ -24,9 +24,22 @@ struct MediaThumbnailView: View {
         }
     }
 
+    private var placeholderIcon: String {
+        if project.isVideo {
+            return "video"
+        }
+        if project.isAudio {
+            return "waveform"
+        }
+        return "photo"
+    }
+
     private func generateThumbnail() async -> UIImage? {
         if project.isVideo {
             return generateVideoThumbnail()
+        }
+        if project.isAudio {
+            return nil
         }
         return UIImage(contentsOfFile: project.mediaUrl.path)
     }

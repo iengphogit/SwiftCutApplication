@@ -6,6 +6,8 @@ struct ProjectHistoryScreen: View {
     let projects: [WorkspaceProject]
     var onCreateNewProject: () -> Void
     var onOpenProject: (WorkspaceProject) -> Void
+    var onExit: () -> Void
+    var onDeleteProject: (WorkspaceProject) -> Void
 
     private let relativeFormatter = RelativeDateTimeFormatter()
 
@@ -16,7 +18,7 @@ struct ProjectHistoryScreen: View {
 
             ScrollView {
                 VStack(spacing: 0) {
-                    HeaderBar()
+                    HeaderBar(onExit: onExit)
                         .padding(.horizontal, 24)
                         .padding(.top, 18)
 
@@ -50,20 +52,25 @@ struct ProjectHistoryScreen: View {
                                     for: project.createdAt,
                                     relativeTo: Date()
                                 ),
-                                onOpen: { onOpenProject(project) }
+                                onOpen: { onOpenProject(project) },
+                                onDelete: { onDeleteProject(project) }
                             )
                         }
                     }
-                    .padding(.horizontal, 16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
                     .padding(.top, 12)
                     .padding(.bottom, 24)
                 }
             }
         }
+        .navigationBarBackButtonHidden(true)
     }
 }
 
 private struct HeaderBar: View {
+    var onExit: () -> Void
+
     var body: some View {
         HStack {
             HStack(spacing: 12) {
@@ -83,8 +90,7 @@ private struct HeaderBar: View {
             Spacer()
 
             HStack(spacing: 8) {
-                CircleButton(symbol: "magnifyingglass")
-                CircleButton(symbol: "gearshape")
+                CircleButton(symbol: "xmark", action: onExit)
             }
         }
     }
@@ -92,13 +98,17 @@ private struct HeaderBar: View {
 
 private struct CircleButton: View {
     let symbol: String
+    var action: () -> Void = {}
 
     var body: some View {
-        Image(systemName: symbol)
-            .foregroundColor(AppTheme.textSecondary)
-            .frame(width: 36, height: 36)
-            .background(AppTheme.surface)
-            .clipShape(Circle())
+        Button(action: action) {
+            Image(systemName: symbol)
+                .foregroundColor(AppTheme.textSecondary)
+                .frame(width: 36, height: 36)
+                .background(AppTheme.surface)
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -152,78 +162,93 @@ private struct ProjectHistoryRow: View {
     let project: WorkspaceProject
     let subtitle: String
     var onOpen: () -> Void
+    var onDelete: () -> Void
 
     @State private var durationText: String?
+    @State private var isOptionsPresented = false
 
     var body: some View {
-        Button(action: onOpen) {
-            HStack(spacing: 12) {
-                ZStack {
-                    MediaThumbnailView(project: project)
-                    if project.isVideo {
-                        Color.black.opacity(0.2)
-                        Image(systemName: "play.fill")
-                            .foregroundColor(.white)
-                            .font(.system(size: 16, weight: .bold))
-                    }
+        HStack(spacing: 12) {
+            ZStack {
+                MediaThumbnailView(project: project)
+                if project.isVideo {
+                    Color.black.opacity(0.2)
+                    Image(systemName: "play.fill")
+                        .foregroundColor(.white)
+                        .font(.system(size: 16, weight: .bold))
                 }
-                .frame(width: 96, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            Text(durationText ?? "00:00")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(Color.black.opacity(0.6))
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        }
-                    }
-                    .padding(6)
-                )
+            }
+            .frame(width: 96, height: 64)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(durationOverlay)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(project.name)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(AppTheme.textPrimary)
-                        .lineLimit(1)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(project.name)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .lineLimit(1)
 
-                    HStack(spacing: 6) {
-                        Text(subtitle)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(AppTheme.textSecondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 4)
-                            .background(AppTheme.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                        Text(project.isVideo ? "Video" : "Image")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(AppTheme.textSecondary)
-                    }
+                HStack(spacing: 6) {
+                    Text(subtitle)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
+                        .background(AppTheme.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    Text(projectTypeLabel)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
                 }
+            }
 
-                Spacer()
+            Spacer()
+            Divider()
+                .frame(height: 36)
+                .background(AppTheme.surfaceBorder)
 
+            Button(action: { isOptionsPresented = true }) {
                 Image(systemName: "ellipsis")
                     .foregroundColor(AppTheme.textSecondary)
                     .rotationEffect(.degrees(90))
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
             }
-            .padding(10)
-            .background(AppTheme.surface)
-            .cornerRadius(14)
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(AppTheme.surfaceBorder, lineWidth: 1)
-            )
+            .buttonStyle(.plain)
+            .hoverEffect(.highlight)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .padding(10)
+        .background(AppTheme.surface)
+        .cornerRadius(14)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(AppTheme.surfaceBorder, lineWidth: 1)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .confirmationDialog("Project Options", isPresented: $isOptionsPresented) {
+            Button("Delete Project", role: .destructive) {
+                onDelete()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Divider()
+        }
         .task(id: project.id) {
-            durationText = project.isVideo ? formatDuration() : nil
+            durationText = project.isVideo || project.isAudio ? formatDuration() : nil
         }
+    }
+
+    private var projectTypeLabel: String {
+        if project.isVideo {
+            return "Video"
+        }
+        if project.isAudio {
+            return "Audio"
+        }
+        return "Image"
     }
 
     private func formatDuration() -> String? {
@@ -235,5 +260,26 @@ private struct ProjectHistoryRow: View {
         let minutes = Int(seconds) / 60
         let remainingSeconds = Int(seconds) % 60
         return String(format: "%02d:%02d", minutes, remainingSeconds)
+    }
+
+    private var durationOverlay: some View {
+        Group {
+            if let durationText {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text(durationText)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.black.opacity(0.6))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+                .padding(6)
+            }
+        }
     }
 }
