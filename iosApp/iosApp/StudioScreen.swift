@@ -1,5 +1,5 @@
 import SwiftUI
-import AVKit
+import AVFoundation
 import UIKit
 
 struct StudioScreen: View {
@@ -419,7 +419,7 @@ private struct MediaPreview: View {
                 )
 
             if project.isVideo {
-                VideoPlayer(player: AVPlayer(url: project.mediaUrl))
+                StudioVideoPreview(url: project.mediaUrl)
                     .clipShape(RoundedRectangle(cornerRadius: 16))
             } else if project.isAudio {
                 VStack(spacing: 12) {
@@ -442,6 +442,53 @@ private struct MediaPreview: View {
         }
         .frame(maxWidth: .infinity)
         .aspectRatio(aspectRatio.ratioValue, contentMode: .fit)
+    }
+}
+
+private struct StudioVideoPreview: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> StudioVideoPreviewView {
+        let view = StudioVideoPreviewView()
+        view.configure(url: url)
+        return view
+    }
+
+    func updateUIView(_ uiView: StudioVideoPreviewView, context: Context) {
+        uiView.configure(url: url)
+    }
+}
+
+private final class StudioVideoPreviewView: UIView {
+    private let player = AVPlayer()
+    private var configuredURL: URL?
+
+    override static var layerClass: AnyClass {
+        AVPlayerLayer.self
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+        playerLayer.videoGravity = .resizeAspect
+        player.isMuted = true
+        player.actionAtItemEnd = .pause
+        playerLayer.player = player
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(url: URL) {
+        guard configuredURL != url else { return }
+        configuredURL = url
+        player.replaceCurrentItem(with: AVPlayerItem(url: url))
+        player.seek(to: .zero)
+    }
+
+    private var playerLayer: AVPlayerLayer {
+        layer as! AVPlayerLayer
     }
 }
 

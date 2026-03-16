@@ -11,4 +11,4 @@
 - Heavy effects: Metal (optional, later)
 
 ## Best Fit
-- CapCut-like smoothness and Apple-native exporting
+- smooth editor interaction and Apple-native exporting

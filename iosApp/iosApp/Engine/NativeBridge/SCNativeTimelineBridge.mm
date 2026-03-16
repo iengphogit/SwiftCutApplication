@@ -1,0 +1,155 @@
+#import "SCNativeTimelineBridge.h"
+
+#import "../NativeCore/SwiftCutNativeTimelineEngine.hpp"
+
+@implementation SCNativeTimelineBridge {
+    swiftcut::NativeTimelineEngine _engine;
+}
+
+- (void)resetWithCanvasWidth:(NSInteger)canvasWidth
+                canvasHeight:(NSInteger)canvasHeight
+                   frameRate:(NSInteger)frameRate {
+    swiftcut::TimelineSettings settings;
+    settings.canvasWidth = (int)canvasWidth;
+    settings.canvasHeight = (int)canvasHeight;
+    settings.frameRate = (int)frameRate;
+    _engine.reset(settings);
+}
+
+- (BOOL)hasTrackWithId:(NSString *)trackId {
+    return _engine.hasTrack(trackId.UTF8String);
+}
+
+- (BOOL)hasClipWithId:(NSString *)clipId {
+    return _engine.hasClip(clipId.UTF8String);
+}
+
+- (void)addTrackWithId:(NSString *)trackId
+                  name:(NSString *)name
+                  type:(NSString *)type
+                 layer:(NSInteger)layer
+                 muted:(BOOL)muted
+                locked:(BOOL)locked {
+    swiftcut::TimelineTrack track;
+    track.id = trackId.UTF8String;
+    track.name = name.UTF8String;
+    track.type = [self trackTypeFromString:type];
+    track.layer = (int)layer;
+    track.muted = muted;
+    track.locked = locked;
+    _engine.addTrack(track);
+}
+
+- (BOOL)addClipToTrackWithId:(NSString *)trackId
+                      clipId:(NSString *)clipId
+                        name:(NSString *)name
+                        type:(NSString *)type
+                  sourcePath:(NSString * _Nullable)sourcePath
+                 sourceStart:(double)sourceStart
+              sourceDuration:(double)sourceDuration
+               timelineStart:(double)timelineStart
+            timelineDuration:(double)timelineDuration
+                       speed:(double)speed
+                     enabled:(BOOL)enabled {
+    swiftcut::TimelineClip clip;
+    clip.id = clipId.UTF8String;
+    clip.name = name.UTF8String;
+    clip.type = [self trackTypeFromString:type];
+    clip.sourcePath = sourcePath != nil ? sourcePath.UTF8String : "";
+    clip.sourceRange.startSeconds = sourceStart;
+    clip.sourceRange.durationSeconds = sourceDuration;
+    clip.timelineRange.startSeconds = timelineStart;
+    clip.timelineRange.durationSeconds = timelineDuration;
+    clip.speed = speed;
+    clip.enabled = enabled;
+    return _engine.addClip(trackId.UTF8String, clip);
+}
+
+- (BOOL)removeClipWithId:(NSString *)clipId {
+    return _engine.removeClip(clipId.UTF8String);
+}
+
+- (NSString * _Nullable)splitClipWithId:(NSString *)clipId
+                        splitTimeSeconds:(double)splitTimeSeconds {
+    std::string newClipId;
+    const bool didSplit = _engine.splitClip(clipId.UTF8String, splitTimeSeconds, newClipId);
+    if (!didSplit || newClipId.empty()) {
+        return nil;
+    }
+    return [NSString stringWithUTF8String:newClipId.c_str()];
+}
+
+- (NSDictionary<NSString *, id> *)snapshotDictionary {
+    const swiftcut::TimelineSnapshot snapshot = _engine.snapshot();
+    NSMutableArray<NSDictionary<NSString *, id> *> *tracks = [NSMutableArray array];
+
+    for (const auto &track : snapshot.tracks) {
+        NSMutableArray<NSDictionary<NSString *, id> *> *clips = [NSMutableArray array];
+        for (const auto &clip : track.clips) {
+            [clips addObject:@{
+                @"id": [NSString stringWithUTF8String:clip.id.c_str()],
+                @"name": [NSString stringWithUTF8String:clip.name.c_str()],
+                @"type": [self stringFromTrackType:clip.type],
+                @"timelineStart": @(clip.timelineRange.startSeconds),
+                @"timelineDuration": @(clip.timelineRange.durationSeconds),
+                @"sourcePath": clip.sourcePath.empty()
+                    ? @""
+                    : [NSString stringWithUTF8String:clip.sourcePath.c_str()]
+            }];
+        }
+
+        [tracks addObject:@{
+            @"id": [NSString stringWithUTF8String:track.id.c_str()],
+            @"name": [NSString stringWithUTF8String:track.name.c_str()],
+            @"type": [self stringFromTrackType:track.type],
+            @"layer": @(track.layer),
+            @"muted": @(track.muted),
+            @"locked": @(track.locked),
+            @"clips": clips
+        }];
+    }
+
+    return @{
+        @"canvasWidth": @(snapshot.settings.canvasWidth),
+        @"canvasHeight": @(snapshot.settings.canvasHeight),
+        @"frameRate": @(snapshot.settings.frameRate),
+        @"trackCount": @(snapshot.tracks.size()),
+        @"clipCount": @(snapshot.totalClipCount),
+        @"durationSeconds": @(snapshot.durationSeconds),
+        @"tracks": tracks
+    };
+}
+
+- (swiftcut::TrackType)trackTypeFromString:(NSString *)type {
+    if ([type isEqualToString:@"audio"]) {
+        return swiftcut::TrackType::audio;
+    }
+    if ([type isEqualToString:@"text"]) {
+        return swiftcut::TrackType::text;
+    }
+    if ([type isEqualToString:@"overlay"]) {
+        return swiftcut::TrackType::overlay;
+    }
+    if ([type isEqualToString:@"effect"]) {
+        return swiftcut::TrackType::effect;
+    }
+    return swiftcut::TrackType::video;
+}
+
+- (NSString *)stringFromTrackType:(swiftcut::TrackType)type {
+    switch (type) {
+        case swiftcut::TrackType::audio:
+            return @"audio";
+        case swiftcut::TrackType::text:
+            return @"text";
+        case swiftcut::TrackType::overlay:
+            return @"overlay";
+        case swiftcut::TrackType::effect:
+            return @"effect";
+        case swiftcut::TrackType::video:
+        default:
+            return @"video";
+    }
+}
+
+@end
