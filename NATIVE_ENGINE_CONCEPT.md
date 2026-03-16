@@ -222,6 +222,41 @@ Implemented in the current codebase:
 - Objective-C++ timeline bridge
 - Swift `NativeEditorEngine` facade over native timeline and playback
 - timeline editor is now the active project-editing screen
+- native-first timeline UI state for:
+  - timeline snapshots
+  - visible duration
+  - undo and redo availability
+  - clip thumbnails and audio waveform bars
+- active editor UI includes:
+  - centered playhead
+  - top project title
+  - glass aspect-ratio popup
+  - glass resolution/frame-rate/bitrate popup
+  - preview-footer undo and redo
+  - centered overlay play or pause icon on the preview
+
+Native-first edit paths already in use:
+
+- import and add clip
+- add text/debug clip
+- split
+- delete
+- ripple delete
+- move
+- trim
+- mute, lock, and remove track
+- undo and redo
+
+Still transitional:
+
+- Swift timeline still exists as a compatibility model for preview and export
+- `refreshDisplay()` still incrementally syncs Swift timeline data into native as a safety path
+- preview and export still rebuild from the Swift compatibility timeline
+- preview playback still uses `AVPlayer` as the backend
+- C++ timeline core with timeline, tracks, and clips
+- Objective-C++ timeline bridge
+- Swift `NativeEditorEngine` facade over native timeline and playback
+- timeline editor is now the active project-editing screen
 - centered-playhead timeline editor UI
 - native-first timeline UI state for:
   - timeline snapshots

@@ -4,11 +4,38 @@ import PhotosUI
 import UIKit
 
 struct TimelineEditorScreen: View {
+    let project: WorkspaceProject
+    var onBack: () -> Void = {}
+    var onUpdateAspectRatio: (AspectRatio) -> Void = { _ in }
+    var onUpdateUhdSettings: (UhdResolution, UhdFrameRate, UhdBitrate) -> Void = { _, _, _ in }
+
     @StateObject private var viewModel = TimelineEditorViewModel()
     @State private var selectedClipId: UUID?
     @State private var showMediaPicker = false
     @State private var mediaPickerTarget: MediaPickerTarget = .video
     @State private var zoomScale: CGFloat = 1.0
+    @State private var isRatioPanelVisible = false
+    @State private var isUhdPanelVisible = false
+    @State private var selectedRatio: AspectRatio
+    @State private var selectedResolution: UhdResolution
+    @State private var selectedFrameRate: UhdFrameRate
+    @State private var selectedBitrate: UhdBitrate
+
+    init(
+        project: WorkspaceProject,
+        onBack: @escaping () -> Void = {},
+        onUpdateAspectRatio: @escaping (AspectRatio) -> Void = { _ in },
+        onUpdateUhdSettings: @escaping (UhdResolution, UhdFrameRate, UhdBitrate) -> Void = { _, _, _ in }
+    ) {
+        self.project = project
+        self.onBack = onBack
+        self.onUpdateAspectRatio = onUpdateAspectRatio
+        self.onUpdateUhdSettings = onUpdateUhdSettings
+        _selectedRatio = State(initialValue: project.aspectRatio)
+        _selectedResolution = State(initialValue: project.resolution)
+        _selectedFrameRate = State(initialValue: project.frameRate)
+        _selectedBitrate = State(initialValue: project.bitrate)
+    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -16,6 +43,7 @@ struct TimelineEditorScreen: View {
                 Color.black.ignoresSafeArea()
                 
                 VStack(spacing: 0) {
+                    topTitleSection
                     headerSection
                     previewSection(geometry: geometry)
                     toolsSection
@@ -33,11 +61,22 @@ struct TimelineEditorScreen: View {
                 )
             }
         }
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private var topTitleSection: some View {
+        Text(project.name)
+            .font(.system(size: 18, weight: .bold))
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
+            .padding(.bottom, 10)
     }
     
     private var headerSection: some View {
         HStack {
-            Button(action: {}) {
+            Button(action: onBack) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(.white)
@@ -47,32 +86,53 @@ struct TimelineEditorScreen: View {
             }
             
             Spacer()
-            
-            Text(viewModel.projectName)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
-            
-            Spacer()
-            
-            Button(action: { viewModel.undo() }) {
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(viewModel.canUndo ? .white : .gray)
-                    .frame(width: 36, height: 36)
-                    .background(Color(white: 0.2))
-                    .clipShape(Circle())
-            }
-            .disabled(!viewModel.canUndo)
 
-            Button(action: { viewModel.redo() }) {
-                Image(systemName: "arrow.uturn.forward")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(viewModel.canRedo ? .white : .gray)
-                    .frame(width: 36, height: 36)
-                    .background(Color(white: 0.2))
-                    .clipShape(Circle())
+            HStack(spacing: 10) {
+                Button(action: { isRatioPanelVisible = true }) {
+                    HeaderGlassButton(
+                        title: selectedRatio.displayName,
+                        ratioIconSize: selectedRatio.iconSize
+                    )
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $isRatioPanelVisible, arrowEdge: .top) {
+                    RatioGlassPanel(
+                        selectedRatio: selectedRatio,
+                        onSelect: { ratio in
+                            selectedRatio = ratio
+                            isRatioPanelVisible = false
+                            onUpdateAspectRatio(ratio)
+                        }
+                    )
+                    .presentationCompactAdaptation(.popover)
+                }
+
+                Button(action: { isUhdPanelVisible = true }) {
+                    HeaderGlassButton(title: selectedResolution.displayName)
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $isUhdPanelVisible, arrowEdge: .top) {
+                    UhdGlassPanel(
+                        onSelectResolution: { resolution in
+                            selectedResolution = resolution
+                            onUpdateUhdSettings(resolution, selectedFrameRate, selectedBitrate)
+                        },
+                        onSelectFrameRate: { frameRate in
+                            selectedFrameRate = frameRate
+                            onUpdateUhdSettings(selectedResolution, frameRate, selectedBitrate)
+                        },
+                        onSelectBitrate: { bitrate in
+                            selectedBitrate = bitrate
+                            onUpdateUhdSettings(selectedResolution, selectedFrameRate, bitrate)
+                        },
+                        onApply: { isUhdPanelVisible = false },
+                        selectedResolution: selectedResolution,
+                        selectedFrameRate: selectedFrameRate,
+                        selectedBitrate: selectedBitrate
+                    )
+                    .presentationCompactAdaptation(.popover)
+                }
             }
-            .disabled(!viewModel.canRedo)
 
             Button(action: { viewModel.exportVideo() }) {
                 Text("Export")
@@ -90,58 +150,65 @@ struct TimelineEditorScreen: View {
     }
     
     private func previewSection(geometry: GeometryProxy) -> some View {
-        ZStack {
-            Color.black
-            
-            if let player = viewModel.previewPlayer {
-                NativeEnginePreviewHost(
-                    player: player,
-                    compositionFrame: viewModel.compositionFrame
-                )
-            } else {
-                VStack(spacing: 16) {
-                    Image(systemName: "video.badge.plus")
-                        .font(.system(size: 48))
-                        .foregroundColor(.gray)
-                    
-                    Text("Tap Add to import video")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.gray)
-                }
-            }
-            
-            VStack {
-                Spacer()
-                HStack {
-                    Button(action: { viewModel.togglePlayback() }) {
-                        Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(width: 52, height: 52)
-                            .background(Color.black.opacity(0.72))
-                            .overlay(
-                                Circle()
-                                    .stroke(Color.white.opacity(0.16), lineWidth: 1)
-                            )
-                            .clipShape(Circle())
+        VStack(spacing: 0) {
+            ZStack {
+                Color.black
+                
+                if let player = viewModel.previewPlayer {
+                    NativeEnginePreviewHost(
+                        player: player,
+                        compositionFrame: viewModel.compositionFrame
+                    )
+                } else {
+                    VStack(spacing: 16) {
+                        Image(systemName: "video.badge.plus")
+                            .font(.system(size: 48))
+                            .foregroundColor(.gray)
+                        
+                        Text("Tap Add to import video")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.gray)
                     }
-
-                    Spacer()
-                    
-                    Text(viewModel.currentTimeString)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white)
-                        .padding(8)
-                        .background(Color.black.opacity(0.6))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
-                .padding(12)
+
+                Button(action: { viewModel.togglePlayback() }) {
+                    Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundColor(.white.opacity(0.94))
+                        .shadow(color: .black.opacity(0.45), radius: 10)
+                }
+            }
+            .frame(height: geometry.size.height * 0.29)
+            .clipped()
+
+            HStack(spacing: 14) {
+                Button(action: { viewModel.undo() }) {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(viewModel.canUndo ? .white : .gray)
+                        .frame(width: 38, height: 38)
+                        .background(Color(white: 0.18))
+                        .clipShape(Circle())
+                }
+                .disabled(!viewModel.canUndo)
+
+                Button(action: { viewModel.redo() }) {
+                    Image(systemName: "arrow.uturn.forward")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(viewModel.canRedo ? .white : .gray)
+                        .frame(width: 38, height: 38)
+                        .background(Color(white: 0.18))
+                        .clipShape(Circle())
+                }
+                .disabled(!viewModel.canRedo)
 
                 Spacer()
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color(white: 0.08))
         }
-        .frame(height: geometry.size.height * 0.35)
-        .clipped()
+        .background(Color.black)
     }
     
     private var toolsSection: some View {
@@ -218,9 +285,13 @@ struct TimelineEditorScreen: View {
     
     private var timelineHeader: some View {
         HStack {
-            Text("Timeline")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.gray)
+            Text("\(viewModel.currentTimeString) / \(viewModel.durationString)")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.86))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             
             Spacer()
             
@@ -439,6 +510,210 @@ private struct NativeEnginePreviewHost: UIViewRepresentable {
             return compositionFrame.visualClips.count > 1
                 ? "Video active +\(compositionFrame.visualClips.count - 1)"
                 : "Video active"
+        }
+    }
+}
+
+private struct RatioGlassPanel: View {
+    let selectedRatio: AspectRatio
+    let onSelect: (AspectRatio) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(AspectRatio.allCases, id: \.self) { ratio in
+                    Button(action: { onSelect(ratio) }) {
+                        RatioGlassOption(
+                            ratio: ratio,
+                            isSelected: ratio == selectedRatio
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(12)
+        }
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .padding(8)
+    }
+}
+
+private struct RatioGlassOption: View {
+    let ratio: AspectRatio
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
+                .stroke(Color.white.opacity(0.9), lineWidth: 1)
+                .frame(width: ratio.iconSize.width, height: ratio.iconSize.height)
+
+            Text(ratio.displayName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(isSelected ? Color.blue.opacity(0.35) : Color.white.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(
+                    isSelected ? Color.blue.opacity(0.85) : Color.white.opacity(0.14),
+                    lineWidth: 1
+                )
+        )
+    }
+}
+
+private struct UhdGlassPanel: View {
+    var onSelectResolution: (UhdResolution) -> Void
+    var onSelectFrameRate: (UhdFrameRate) -> Void
+    var onSelectBitrate: (UhdBitrate) -> Void
+    var onApply: () -> Void
+    let selectedResolution: UhdResolution
+    let selectedFrameRate: UhdFrameRate
+    let selectedBitrate: UhdBitrate
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            glassSectionTitle("Resolution")
+            GlassStepSelectorRow(
+                items: UhdResolution.allCases,
+                selectedItem: selectedResolution,
+                label: { $0.displayName },
+                onSelect: onSelectResolution
+            )
+
+            glassSectionTitle("Frame Rate")
+            GlassStepSelectorRow(
+                items: UhdFrameRate.allCases,
+                selectedItem: selectedFrameRate,
+                label: { $0.displayName },
+                onSelect: onSelectFrameRate
+            )
+
+            glassSectionTitle("Bitrate")
+            GlassStepSelectorRow(
+                items: UhdBitrate.allCases,
+                selectedItem: selectedBitrate,
+                label: { $0.displayName },
+                onSelect: onSelectBitrate
+            )
+
+            Button(action: onApply) {
+                Text("Apply")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(Color.blue.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(14)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .padding(8)
+    }
+
+    private func glassSectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.white.opacity(0.7))
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
+
+private struct GlassStepSelectorRow<Option: Hashable>: View {
+    let items: [Option]
+    let selectedItem: Option
+    let label: (Option) -> String
+    var onSelect: (Option) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(items, id: \.self) { item in
+                    Button(action: { onSelect(item) }) {
+                        Text(label(item))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(
+                                        item == selectedItem
+                                            ? Color.blue.opacity(0.32)
+                                            : Color.white.opacity(0.08)
+                                    )
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(
+                                        item == selectedItem
+                                            ? Color.blue.opacity(0.85)
+                                            : Color.white.opacity(0.12),
+                                        lineWidth: 1
+                                    )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+private struct HeaderGlassButton: View {
+    let title: String
+    var ratioIconSize: CGSize? = nil
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let ratioIconSize {
+                RoundedRectangle(cornerRadius: 2)
+                    .stroke(Color.white.opacity(0.9), lineWidth: 1)
+                    .frame(width: ratioIconSize.width, height: ratioIconSize.height)
+            }
+
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial.opacity(0.7))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+    }
+}
+
+private extension AspectRatio {
+    var iconSize: CGSize {
+        switch self {
+        case .ratio16x9:
+            return CGSize(width: 18, height: 10)
+        case .ratio9x16:
+            return CGSize(width: 10, height: 18)
+        case .ratio1x1:
+            return CGSize(width: 14, height: 14)
         }
     }
 }
@@ -906,5 +1181,18 @@ private extension ClipDisplayModel {
 }
 
 #Preview {
-    TimelineEditorScreen()
+    TimelineEditorScreen(
+        project: WorkspaceProject(
+            id: UUID(),
+            name: "Project 001",
+            mediaUrl: URL(fileURLWithPath: "/tmp/sample.mov"),
+            createdAt: Date(),
+            mediaKind: .video,
+            projectNumber: 1,
+            aspectRatio: .ratio16x9,
+            resolution: .p1080,
+            frameRate: .fps24,
+            bitrate: .mbps5
+        )
+    )
 }
