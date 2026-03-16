@@ -61,6 +61,9 @@ struct TimelineEditorScreen: View {
                 )
             }
         }
+        .task(id: project.id) {
+            viewModel.loadProjectIfNeeded(project)
+        }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
     }
@@ -170,13 +173,6 @@ struct TimelineEditorScreen: View {
                             .foregroundColor(.gray)
                     }
                 }
-
-                Button(action: { viewModel.togglePlayback() }) {
-                    Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 34, weight: .bold))
-                        .foregroundColor(.white.opacity(0.94))
-                        .shadow(color: .black.opacity(0.45), radius: 10)
-                }
             }
             .frame(height: geometry.size.height * 0.29)
             .clipped()
@@ -201,6 +197,14 @@ struct TimelineEditorScreen: View {
                         .clipShape(Circle())
                 }
                 .disabled(!viewModel.canRedo)
+
+                Spacer()
+
+                Button(action: { viewModel.togglePlayback() }) {
+                    Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundColor(.white.opacity(0.94))
+                }
 
                 Spacer()
             }
@@ -252,30 +256,42 @@ struct TimelineEditorScreen: View {
     
     private var timelineSection: some View {
         GeometryReader { geometry in
-            let trackLabelWidth: CGFloat = 72
-            let timelineWidth = max(viewModel.tracks.timelineContentWidth(zoomScale: zoomScale), geometry.size.width)
-            let playheadInset = max((geometry.size.width - trackLabelWidth - 8) / 2, 0)
+            let leftChannelWidth = geometry.size.width / 2
+            let rightLanePadding: CGFloat = 10
+            let leadingTimelineInset: CGFloat = 0
+            let timelineWidth = max(
+                viewModel.tracks.timelineContentWidth(zoomScale: zoomScale) + leadingTimelineInset,
+                geometry.size.width - leftChannelWidth
+            )
 
             VStack(spacing: 0) {
                 timelineHeader
                 ZStack(alignment: .topLeading) {
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    TimelineHorizontalScrollView(
+                        currentTime: max(viewModel.currentTime.seconds, 0),
+                        pointsPerSecond: 60 * zoomScale,
+                        onTimeChange: { seconds in
+                            viewModel.seek(
+                                to: CMTime(seconds: seconds, preferredTimescale: 600)
+                            )
+                        }
+                    ) {
                         VStack(spacing: 0) {
                             timelineRuler(
                                 timelineWidth: timelineWidth,
-                                trackLabelWidth: trackLabelWidth,
-                                playheadInset: playheadInset
+                                leftChannelWidth: leftChannelWidth,
+                                leadingTimelineInset: leadingTimelineInset,
+                                rightLanePadding: rightLanePadding
                             )
                             tracksView(
                                 timelineWidth: timelineWidth,
-                                trackLabelWidth: trackLabelWidth,
-                                playheadInset: playheadInset
+                                leftChannelWidth: leftChannelWidth,
+                                leadingTimelineInset: leadingTimelineInset,
+                                rightLanePadding: rightLanePadding
                             )
                         }
                     }
-                    .defaultScrollAnchor(.center)
-
-                    centeredPlayhead(trackLabelWidth: trackLabelWidth + 8)
+                    centeredPlayhead()
                 }
             }
             .background(Color(white: 0.05))
@@ -318,15 +334,24 @@ struct TimelineEditorScreen: View {
     
     private func timelineRuler(
         timelineWidth: CGFloat,
-        trackLabelWidth: CGFloat,
-        playheadInset: CGFloat
+        leftChannelWidth: CGFloat,
+        leadingTimelineInset: CGFloat,
+        rightLanePadding: CGFloat
     ) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 0) {
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color.white.opacity(0.04))
-                .frame(width: trackLabelWidth, height: 24)
+                .fill(Color.white.opacity(0.06))
+                .frame(width: leftChannelWidth, height: 24)
+                .overlay(
+                    Text("Tracks")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.6))
+                )
 
             HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: leadingTimelineInset)
+
                 ForEach(0..<Int(max(viewModel.duration.seconds + 5, 30)), id: \.self) { second in
                     VStack(alignment: .leading, spacing: 2) {
                         Rectangle()
@@ -342,17 +367,17 @@ struct TimelineEditorScreen: View {
                     .frame(width: 60 * zoomScale)
                 }
             }
+            .padding(.leading, rightLanePadding)
             .frame(width: timelineWidth, alignment: .leading)
-            .padding(.horizontal, playheadInset)
         }
         .frame(height: 24)
-        .padding(.horizontal, 8)
     }
     
     private func tracksView(
         timelineWidth: CGFloat,
-        trackLabelWidth: CGFloat,
-        playheadInset: CGFloat
+        leftChannelWidth: CGFloat,
+        leadingTimelineInset: CGFloat,
+        rightLanePadding: CGFloat
     ) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 8) {
@@ -360,17 +385,26 @@ struct TimelineEditorScreen: View {
                     TrackRowView(
                         track: track,
                         timelineWidth: timelineWidth,
-                        trackLabelWidth: trackLabelWidth,
-                        playheadInset: playheadInset,
+                        leftChannelWidth: leftChannelWidth,
+                        leadingTimelineInset: leadingTimelineInset,
+                        rightLanePadding: rightLanePadding,
                         zoomScale: zoomScale,
                         selectedClipId: $selectedClipId,
+                        onToggleMute: {
+                            viewModel.setTrackMuted(track.id, muted: !track.isMuted)
+                        },
+                        onToggleLock: {
+                            viewModel.setTrackLocked(track.id, locked: !track.isLocked)
+                        },
+                        onRemoveTrack: {
+                            viewModel.removeTrack(track.id)
+                        },
                         onClipTap: { clipId in
                             selectedClipId = selectedClipId == clipId ? nil : clipId
                         }
                     )
                 }
             }
-            .padding(.horizontal, 8)
             .padding(.vertical, 8)
         }
         .frame(maxHeight: 200)
@@ -411,7 +445,7 @@ struct TimelineEditorScreen: View {
         return String(format: "%d:%02d", mins, secs)
     }
 
-    private func centeredPlayhead(trackLabelWidth: CGFloat) -> some View {
+    private func centeredPlayhead() -> some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 RoundedRectangle(cornerRadius: 8)
@@ -442,14 +476,14 @@ struct TimelineEditorScreen: View {
                     .frame(width: 4)
                     .overlay(
                         Rectangle()
-                            .fill(Color.white.opacity(0.34))
-                            .frame(width: 1)
+                            .fill(Color.white.opacity(0.95))
+                            .frame(width: 1.5)
                     )
                     .shadow(color: .red.opacity(0.45), radius: 4)
             }
             .frame(height: geometry.size.height, alignment: .top)
             .position(
-                x: trackLabelWidth + ((geometry.size.width - trackLabelWidth) / 2),
+                x: geometry.size.width / 2,
                 y: geometry.size.height / 2
             )
         }
@@ -510,6 +544,114 @@ private struct NativeEnginePreviewHost: UIViewRepresentable {
             return compositionFrame.visualClips.count > 1
                 ? "Video active +\(compositionFrame.visualClips.count - 1)"
                 : "Video active"
+        }
+    }
+}
+
+private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable {
+    let currentTime: Double
+    let pointsPerSecond: CGFloat
+    let onTimeChange: (Double) -> Void
+    let content: Content
+
+    init(
+        currentTime: Double,
+        pointsPerSecond: CGFloat,
+        onTimeChange: @escaping (Double) -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.currentTime = currentTime
+        self.pointsPerSecond = pointsPerSecond
+        self.onTimeChange = onTimeChange
+        self.content = content()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            hostingController: UIHostingController(rootView: content),
+            pointsPerSecond: pointsPerSecond,
+            onTimeChange: onTimeChange
+        )
+    }
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scrollView = UIScrollView()
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.alwaysBounceHorizontal = true
+        scrollView.bounces = true
+        scrollView.delegate = context.coordinator
+        scrollView.backgroundColor = .clear
+
+        let hostedView = context.coordinator.hostingController.view!
+        hostedView.backgroundColor = .clear
+        hostedView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.addSubview(hostedView)
+
+        NSLayoutConstraint.activate([
+            hostedView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
+            hostedView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+            hostedView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            hostedView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+            hostedView.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor)
+        ])
+
+        return scrollView
+    }
+
+    func updateUIView(_ uiView: UIScrollView, context: Context) {
+        context.coordinator.hostingController.rootView = content
+        context.coordinator.pointsPerSecond = pointsPerSecond
+        context.coordinator.onTimeChange = onTimeChange
+
+        let targetOffsetX = max(CGFloat(currentTime) * pointsPerSecond, 0)
+        guard !context.coordinator.isUserInteracting,
+              abs(uiView.contentOffset.x - targetOffsetX) > 1
+        else {
+            return
+        }
+
+        context.coordinator.isProgrammaticScroll = true
+        uiView.setContentOffset(CGPoint(x: targetOffsetX, y: uiView.contentOffset.y), animated: false)
+        context.coordinator.isProgrammaticScroll = false
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        let hostingController: UIHostingController<Content>
+        var pointsPerSecond: CGFloat
+        var onTimeChange: (Double) -> Void
+        var isProgrammaticScroll = false
+        var isUserInteracting = false
+
+        init(
+            hostingController: UIHostingController<Content>,
+            pointsPerSecond: CGFloat,
+            onTimeChange: @escaping (Double) -> Void
+        ) {
+            self.hostingController = hostingController
+            self.pointsPerSecond = pointsPerSecond
+            self.onTimeChange = onTimeChange
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            isUserInteracting = true
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard !isProgrammaticScroll else { return }
+
+            let seconds = max(scrollView.contentOffset.x / max(pointsPerSecond, 1), 0)
+            onTimeChange(seconds)
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate {
+                isUserInteracting = false
+            }
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            isUserInteracting = false
         }
     }
 }
@@ -768,16 +910,20 @@ private struct TimelineBottomToolButton: View {
 private struct TrackRowView: View {
     let track: TrackDisplayModel
     let timelineWidth: CGFloat
-    let trackLabelWidth: CGFloat
-    let playheadInset: CGFloat
+    let leftChannelWidth: CGFloat
+    let leadingTimelineInset: CGFloat
+    let rightLanePadding: CGFloat
     let zoomScale: CGFloat
     @Binding var selectedClipId: UUID?
+    let onToggleMute: () -> Void
+    let onToggleLock: () -> Void
+    let onRemoveTrack: () -> Void
     let onClipTap: (UUID) -> Void
     
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 0) {
             trackIcon
-                .frame(width: trackLabelWidth)
+                .frame(width: leftChannelWidth)
 
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 8)
@@ -793,14 +939,14 @@ private struct TrackRowView: View {
                         zoomScale: zoomScale,
                         isSelected: selectedClipId == clip.id
                     )
-                    .offset(x: clip.startOffset(zoomScale: zoomScale))
+                    .offset(x: leadingTimelineInset + clip.startOffset(zoomScale: zoomScale))
                     .onTapGesture {
                         onClipTap(clip.id)
                     }
                 }
             }
+            .padding(.leading, rightLanePadding)
             .frame(width: timelineWidth, height: 44, alignment: .leading)
-            .padding(.horizontal, playheadInset)
         }
         .frame(height: 52)
         .background(
@@ -815,40 +961,73 @@ private struct TrackRowView: View {
     }
     
     private var trackIcon: some View {
-        VStack(spacing: 4) {
-            Image(systemName: iconForType(track.type))
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(trackColor(track.type))
-            
-            Text(trackShortName)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundColor(.white.opacity(0.8))
-                .lineLimit(1)
+        HStack(spacing: 6) {
+            HStack(spacing: 6) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(trackColor(track.type).opacity(0.18))
+                        .frame(width: 24, height: 24)
 
-            HStack(spacing: 3) {
-                if track.isMuted {
-                    Image(systemName: "speaker.slash.fill")
-                        .font(.system(size: 7, weight: .bold))
-                        .foregroundColor(.yellow.opacity(0.9))
+                    Image(systemName: iconForType(track.type))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(trackColor(track.type))
                 }
 
-                if track.isLocked {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 7, weight: .bold))
-                        .foregroundColor(.red.opacity(0.9))
+                Text(trackShortName)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.82))
+                    .lineLimit(1)
+            }
+            .frame(minWidth: 34, alignment: .trailing)
+
+            HStack(spacing: 6) {
+                channelButton(
+                    systemName: track.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                    tint: track.isMuted ? .yellow.opacity(0.95) : .white.opacity(0.72),
+                    action: onToggleMute
+                )
+
+                channelButton(
+                    systemName: track.isLocked ? "lock.fill" : "lock.open.fill",
+                    tint: track.isLocked ? .red.opacity(0.95) : .white.opacity(0.72),
+                    action: onToggleLock
+                )
+
+                if canRemoveTrack {
+                    channelButton(
+                        systemName: "minus.circle.fill",
+                        tint: .white.opacity(0.72),
+                        action: onRemoveTrack
+                    )
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .frame(maxHeight: .infinity)
-        .padding(.vertical, 6)
+        .frame(width: max(leftChannelWidth - 10, 0), alignment: .trailing)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+        .padding(.leading, 10)
+        .padding(.trailing, 0)
+        .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(trackColor(track.type).opacity(0.14))
+                .fill(trackColor(track.type).opacity(0.12))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(trackColor(track.type).opacity(0.28), lineWidth: 1)
+                .stroke(trackColor(track.type).opacity(0.32), lineWidth: 1)
         )
+    }
+
+    private func channelButton(systemName: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(tint)
+                .frame(width: 22, height: 22)
+                .background(Color.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
     }
     
     private func iconForType(_ type: TrackType) -> String {
@@ -879,6 +1058,9 @@ private struct TrackRowView: View {
         case .overlay: return "OVR"
         case .effect: return "FX"
         }
+    }
+    private var canRemoveTrack: Bool {
+        track.type != .video
     }
 }
 
@@ -921,7 +1103,10 @@ private struct ClipView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 7)
         case .video, .overlay:
-            TimelineClipThumbnail(sourcePath: clip.sourcePath)
+            TimelineClipThumbnailStrip(
+                sourcePath: clip.sourcePath,
+                durationSeconds: clip.durationSeconds
+            )
                 .overlay(
                     LinearGradient(
                         colors: [
@@ -976,27 +1161,46 @@ private struct ClipView: View {
     }
 }
 
-private struct TimelineClipThumbnail: View {
+private struct TimelineClipThumbnailStrip: View {
     let sourcePath: String
+    let durationSeconds: Double
 
-    @State private var image: UIImage?
+    @State private var images: [UIImage] = []
 
     var body: some View {
-        ZStack {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Color.white.opacity(0.12)
-                Image(systemName: "film")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.8))
+        GeometryReader { geometry in
+            let thumbnailCount = max(Int(geometry.size.width / 44), 1)
+
+            ZStack {
+                if images.isEmpty {
+                    Color.white.opacity(0.12)
+                    Image(systemName: "film")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.8))
+                } else {
+                    HStack(spacing: 0) {
+                        ForEach(Array(images.enumerated()), id: \.offset) { _, image in
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(
+                                    width: max(geometry.size.width / CGFloat(images.count), 1),
+                                    height: geometry.size.height
+                                )
+                                .clipped()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
-        }
-        .clipped()
-        .task(id: sourcePath) {
-            image = await TimelineClipVisualCache.thumbnail(for: sourcePath)
+            .clipped()
+            .task(id: "\(sourcePath)-\(thumbnailCount)-\(durationSeconds)") {
+                images = await TimelineClipVisualCache.thumbnailStrip(
+                    for: sourcePath,
+                    durationSeconds: durationSeconds,
+                    frameCount: thumbnailCount
+                )
+            }
         }
     }
 }
@@ -1032,6 +1236,7 @@ private struct AudioWaveformStrip: View {
 
 private enum TimelineClipVisualCache {
     private static let thumbnailCache = NSCache<NSString, UIImage>()
+    private static let thumbnailStripCache = NSCache<NSString, NSArray>()
     private static let waveformCache = NSCache<NSString, NSArray>()
 
     static func thumbnail(for sourcePath: String) async -> UIImage? {
@@ -1055,6 +1260,55 @@ private enum TimelineClipVisualCache {
             let image = UIImage(cgImage: cgImage)
             thumbnailCache.setObject(image, forKey: sourcePath as NSString)
             return image
+        }.value
+    }
+
+    static func thumbnailStrip(
+        for sourcePath: String,
+        durationSeconds: Double,
+        frameCount: Int
+    ) async -> [UIImage] {
+        guard !sourcePath.isEmpty else { return [] }
+
+        let sanitizedFrameCount = max(frameCount, 1)
+        let cacheKey = "\(sourcePath)#\(Int(durationSeconds * 100))#\(sanitizedFrameCount)" as NSString
+
+        if let cached = thumbnailStripCache.object(forKey: cacheKey) as? [UIImage] {
+            return cached
+        }
+
+        return await Task<[UIImage], Never>.detached(priority: .utility) {
+            let url = URL(fileURLWithPath: sourcePath)
+            let asset = AVURLAsset(url: url)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 160, height: 160)
+
+            let assetDuration = max(durationSeconds, 0.1)
+            let times = (0..<sanitizedFrameCount).map { index -> CMTime in
+                let progress = sanitizedFrameCount == 1
+                    ? 0.0
+                    : Double(index) / Double(sanitizedFrameCount - 1)
+                let second = min(assetDuration * progress, max(assetDuration - 0.01, 0))
+                return CMTime(seconds: second, preferredTimescale: 600)
+            }
+
+            var generatedImages: [UIImage] = []
+            for time in times {
+                if let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) {
+                    generatedImages.append(UIImage(cgImage: cgImage))
+                }
+            }
+
+            if generatedImages.isEmpty, let fallback = thumbnailCache.object(forKey: sourcePath as NSString) {
+                generatedImages = [fallback]
+            } else if generatedImages.isEmpty,
+                      let fallback = await thumbnail(for: sourcePath) {
+                generatedImages = [fallback]
+            }
+
+            thumbnailStripCache.setObject(generatedImages as NSArray, forKey: cacheKey)
+            return generatedImages
         }.value
     }
 

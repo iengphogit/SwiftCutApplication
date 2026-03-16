@@ -63,7 +63,7 @@ final class TimelineEngine: TimelineEngineProtocol {
     var timelinePublisher: AnyPublisher<Timeline, Never> { timelineSubject.eraseToAnyPublisher() }
     var timePublisher: AnyPublisher<CMTime, Never> { timeSubject.eraseToAnyPublisher() }
     
-    init(timeline: Timeline = Timeline.create(scenario: .basic)) {
+    init(timeline: Timeline = Timeline(name: "Empty")) {
         self.timeline = timeline
         timelineSubject.send(timeline)
     }

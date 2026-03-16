@@ -94,7 +94,7 @@
 }
 
 - (void)setPreviewPlayer:(AVPlayer * _Nullable)player {
-    self.previewPlayer = player;
+    _previewPlayer = player;
     self.playerLayer.player = player;
     [self startDisplayLinkIfNeeded];
 }

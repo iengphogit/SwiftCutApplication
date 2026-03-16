@@ -29,6 +29,7 @@ class TimelineEditorViewModel: ObservableObject {
     private var player: AVPlayer?
     private var timeObserver: Any?
     private var cancellables = Set<AnyCancellable>()
+    private var loadedProjectId: UUID?
 
     enum ImportDestination {
         case video
@@ -74,7 +75,8 @@ class TimelineEditorViewModel: ObservableObject {
     func importMedia(
         url: URL,
         kind: PickedMediaKind,
-        destination: ImportDestination
+        destination: ImportDestination,
+        at time: CMTime? = nil
     ) {
         let trackType: TrackType
         switch destination {
@@ -88,8 +90,43 @@ class TimelineEditorViewModel: ObservableObject {
 
         switch kind {
         case .video:
-            importVideoIntoNativeEngine(from: url, toTrackType: trackType, at: duration)
+            importVideoIntoNativeEngine(from: url, toTrackType: trackType, at: time ?? duration)
         }
+    }
+
+    func loadProjectIfNeeded(_ project: WorkspaceProject) {
+        guard loadedProjectId != project.id else {
+            return
+        }
+
+        loadedProjectId = project.id
+        projectName = project.name
+        nativeEditorEngine.stop()
+        engine.setTimeline(
+            Timeline(
+                name: project.name,
+                tracks: [
+                    Track(type: .video, layer: .videoMain, name: "Video")
+                ]
+            )
+        )
+        currentTime = .zero
+        duration = .zero
+        tracks = []
+
+        let kind: PickedMediaKind
+        let destination: ImportDestination
+
+        switch project.mediaKind {
+        case .video, .image:
+            kind = .video
+            destination = .video
+        case .audio:
+            kind = .video
+            destination = .audio
+        }
+
+        importMedia(url: project.mediaUrl, kind: kind, destination: destination, at: .zero)
     }
     
     func splitAtPlayhead() {
@@ -518,10 +555,10 @@ private extension TimelineEditorViewModel {
         }
 
         if !nativeTracks.isEmpty {
-            return nativeTracks
+            return nativeTracks.sorted(by: displayTrackOrder)
         }
 
-        return engine.timeline.tracks.map { track in
+        let fallbackTracks = engine.timeline.tracks.map { track in
             TrackDisplayModel(
                 id: track.id,
                 type: track.type,
@@ -540,6 +577,34 @@ private extension TimelineEditorViewModel {
                 isMuted: track.isMuted,
                 isLocked: track.isLocked
             )
+        }
+
+        return fallbackTracks.sorted(by: displayTrackOrder)
+    }
+
+    private func displayTrackOrder(lhs: TrackDisplayModel, rhs: TrackDisplayModel) -> Bool {
+        let lhsPriority = displayPriority(for: lhs.type)
+        let rhsPriority = displayPriority(for: rhs.type)
+
+        if lhsPriority == rhsPriority {
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+
+        return lhsPriority < rhsPriority
+    }
+
+    private func displayPriority(for type: TrackType) -> Int {
+        switch type {
+        case .text:
+            return 0
+        case .overlay:
+            return 1
+        case .effect:
+            return 2
+        case .video:
+            return 3
+        case .audio:
+            return 4
         }
     }
 

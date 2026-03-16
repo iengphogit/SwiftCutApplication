@@ -107,7 +107,11 @@ final class NativeEditorEngine {
 
     @discardableResult
     func removeTrack(id: UUID) -> Bool {
-        timelineEngine.removeTrack(id: id)
+        if let track = timelineSnapshot().tracks.first(where: { $0.id == id }),
+           track.type == TrackType.video.nativeBridgeName {
+            return false
+        }
+        return timelineEngine.removeTrack(id: id)
     }
 
     @discardableResult
