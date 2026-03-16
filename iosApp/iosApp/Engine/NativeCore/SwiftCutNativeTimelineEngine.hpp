@@ -63,17 +63,36 @@ public:
     void reset(const TimelineSettings &settings);
     void setSettings(const TimelineSettings &settings);
     void addTrack(const TimelineTrack &track);
+    bool removeTrack(const std::string &trackId);
+    bool setTrackMuted(const std::string &trackId, bool muted);
+    bool setTrackLocked(const std::string &trackId, bool locked);
     bool addClip(const std::string &trackId, const TimelineClip &clip);
     bool hasTrack(const std::string &trackId) const;
     bool hasClip(const std::string &clipId) const;
     bool removeClip(const std::string &clipId);
+    bool rippleDeleteClip(const std::string &clipId);
+    bool moveClip(const std::string &clipId, double timelineStartSeconds);
+    bool trimClip(
+        const std::string &clipId,
+        double sourceStartSeconds,
+        double sourceDurationSeconds
+    );
     bool splitClip(const std::string &clipId, double splitTimeSeconds, std::string &newClipId);
+    bool canUndo() const;
+    bool canRedo() const;
+    bool undo();
+    bool redo();
 
     TimelineSnapshot snapshot() const;
 
 private:
+    void pushUndoState();
+    TimelineSnapshot buildSnapshot() const;
+
     TimelineSettings settings_;
     std::vector<TimelineTrack> tracks_;
+    std::vector<TimelineSnapshot> undoStack_;
+    std::vector<TimelineSnapshot> redoStack_;
 };
 
 }  // namespace swiftcut

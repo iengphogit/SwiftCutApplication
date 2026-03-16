@@ -185,7 +185,7 @@ struct TimelineEditorScreen: View {
     
     private var timelineSection: some View {
         GeometryReader { geometry in
-            let trackLabelWidth: CGFloat = 48
+            let trackLabelWidth: CGFloat = 72
             let timelineWidth = max(viewModel.tracks.timelineContentWidth(zoomScale: zoomScale), geometry.size.width)
             let playheadInset = max((geometry.size.width - trackLabelWidth - 8) / 2, 0)
 
@@ -213,7 +213,7 @@ struct TimelineEditorScreen: View {
             }
             .background(Color(white: 0.05))
         }
-        .frame(height: 240)
+        .frame(height: 272)
     }
     
     private var timelineHeader: some View {
@@ -251,7 +251,8 @@ struct TimelineEditorScreen: View {
         playheadInset: CGFloat
     ) -> some View {
         HStack(spacing: 8) {
-            Color.clear
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.white.opacity(0.04))
                 .frame(width: trackLabelWidth, height: 24)
 
             HStack(spacing: 0) {
@@ -342,10 +343,18 @@ struct TimelineEditorScreen: View {
     private func centeredPlayhead(trackLabelWidth: CGFloat) -> some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.red.opacity(0.12))
+                    .frame(width: 26, height: geometry.size.height)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.red.opacity(0.18), lineWidth: 1)
+                    )
+
                 Capsule()
                     .fill(Color.red)
-                    .frame(width: 20, height: 8)
-                    .shadow(color: .red.opacity(0.5), radius: 4)
+                    .frame(width: 22, height: 10)
+                    .shadow(color: .red.opacity(0.55), radius: 5)
                 
                 Rectangle()
                     .fill(
@@ -359,13 +368,13 @@ struct TimelineEditorScreen: View {
                             endPoint: .bottom
                         )
                     )
-                    .frame(width: 3)
+                    .frame(width: 4)
                     .overlay(
                         Rectangle()
-                            .fill(Color.white.opacity(0.28))
+                            .fill(Color.white.opacity(0.34))
                             .frame(width: 1)
                     )
-                    .shadow(color: .red.opacity(0.4), radius: 3)
+                    .shadow(color: .red.opacity(0.45), radius: 4)
             }
             .frame(height: geometry.size.height, alignment: .top)
             .position(
@@ -496,6 +505,13 @@ private struct TrackRowView: View {
                 .frame(width: trackLabelWidth)
 
             ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.white.opacity(0.035))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.white.opacity(0.05), lineWidth: 1)
+                    )
+
                 ForEach(track.clips) { clip in
                     ClipView(
                         clip: clip,
@@ -508,24 +524,56 @@ private struct TrackRowView: View {
                     }
                 }
             }
-            .frame(width: timelineWidth, height: 36, alignment: .leading)
+            .frame(width: timelineWidth, height: 44, alignment: .leading)
             .padding(.horizontal, playheadInset)
         }
-        .frame(height: 44)
-        .background(Color(white: 0.1))
+        .frame(height: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(white: 0.11))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.white.opacity(0.05), lineWidth: 1)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
     
     private var trackIcon: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 4) {
             Image(systemName: iconForType(track.type))
-                .font(.system(size: 14))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(trackColor(track.type))
             
-            Text(track.name)
-                .font(.system(size: 8, weight: .medium))
-                .foregroundColor(.gray)
+            Text(trackShortName)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(.white.opacity(0.8))
+                .lineLimit(1)
+
+            HStack(spacing: 3) {
+                if track.isMuted {
+                    Image(systemName: "speaker.slash.fill")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundColor(.yellow.opacity(0.9))
+                }
+
+                if track.isLocked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundColor(.red.opacity(0.9))
+                }
+            }
         }
+        .frame(maxHeight: .infinity)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(trackColor(track.type).opacity(0.14))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(trackColor(track.type).opacity(0.28), lineWidth: 1)
+        )
     }
     
     private func iconForType(_ type: TrackType) -> String {
@@ -547,6 +595,16 @@ private struct TrackRowView: View {
         case .effect: return .pink
         }
     }
+
+    private var trackShortName: String {
+        switch track.type {
+        case .video: return "VID"
+        case .audio: return "AUD"
+        case .text: return "TXT"
+        case .overlay: return "OVR"
+        case .effect: return "FX"
+        }
+    }
 }
 
 private struct ClipView: View {
@@ -555,12 +613,21 @@ private struct ClipView: View {
     let isSelected: Bool
     
     var body: some View {
-        HStack(spacing: 4) {
-            if clip.hasThumbnail {
-                Color.blue.opacity(0.3)
-            } else {
-                Color.orange.opacity(0.3)
+        ZStack(alignment: .leading) {
+            clipBackground
+
+            HStack(spacing: 6) {
+                clipLeadingVisual
+
+                Text(clip.name)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .padding(.trailing, 4)
+
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, 6)
         }
         .frame(width: clip.width(zoomScale: zoomScale), height: 36)
         .background(clipColor(clip.type))
@@ -569,13 +636,58 @@ private struct ClipView: View {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(isSelected ? Color.white : Color.clear, lineWidth: 2)
         )
-        .overlay(
-            Text(clip.name)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(.white)
-                .lineLimit(1)
-                .padding(4)
-        )
+    }
+
+    @ViewBuilder
+    private var clipBackground: some View {
+        switch clip.type {
+        case .audio:
+            AudioWaveformStrip(sourcePath: clip.sourcePath)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 7)
+        case .video, .overlay:
+            TimelineClipThumbnail(sourcePath: clip.sourcePath)
+                .overlay(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.08),
+                            Color.black.opacity(0.36)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        case .text:
+            Color.orange.opacity(0.18)
+        case .effect:
+            Color.pink.opacity(0.18)
+        }
+    }
+
+    @ViewBuilder
+    private var clipLeadingVisual: some View {
+        switch clip.type {
+        case .audio:
+            Image(systemName: "waveform")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(0.85))
+        case .video:
+            Image(systemName: "film")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(0.85))
+        case .overlay:
+            Image(systemName: "square.on.square")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(0.85))
+        case .text:
+            Image(systemName: "textformat")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(0.85))
+        case .effect:
+            Image(systemName: "sparkles")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(0.85))
+        }
     }
     
     private func clipColor(_ type: TrackType) -> Color {
@@ -586,6 +698,193 @@ private struct ClipView: View {
         case .overlay: return Color.purple.opacity(0.6)
         case .effect: return Color.pink.opacity(0.6)
         }
+    }
+}
+
+private struct TimelineClipThumbnail: View {
+    let sourcePath: String
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.white.opacity(0.12)
+                Image(systemName: "film")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.8))
+            }
+        }
+        .clipped()
+        .task(id: sourcePath) {
+            image = await TimelineClipVisualCache.thumbnail(for: sourcePath)
+        }
+    }
+}
+
+private struct AudioWaveformStrip: View {
+    let sourcePath: String
+
+    @State private var samples: [CGFloat] = []
+
+    var body: some View {
+        GeometryReader { geometry in
+            let visibleSamples = samples.isEmpty
+                ? Array(repeating: CGFloat(0.35), count: 24)
+                : samples
+
+            HStack(alignment: .center, spacing: 2) {
+                ForEach(Array(visibleSamples.enumerated()), id: \.offset) { _, sample in
+                    Capsule()
+                        .fill(Color.white.opacity(0.88))
+                        .frame(
+                            width: max((geometry.size.width / CGFloat(visibleSamples.count)) - 2, 2),
+                            height: max(4, geometry.size.height * sample)
+                        )
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+        .task(id: sourcePath) {
+            samples = await TimelineClipVisualCache.waveform(for: sourcePath)
+        }
+    }
+}
+
+private enum TimelineClipVisualCache {
+    private static let thumbnailCache = NSCache<NSString, UIImage>()
+    private static let waveformCache = NSCache<NSString, NSArray>()
+
+    static func thumbnail(for sourcePath: String) async -> UIImage? {
+        guard !sourcePath.isEmpty else { return nil }
+
+        if let cached = thumbnailCache.object(forKey: sourcePath as NSString) {
+            return cached
+        }
+
+        return await Task<UIImage?, Never>.detached(priority: .utility) {
+            let url = URL(fileURLWithPath: sourcePath)
+            let asset = AVAsset(url: url)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+
+            let time = CMTime(seconds: 0.1, preferredTimescale: 600)
+            guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else {
+                return nil
+            }
+
+            let image = UIImage(cgImage: cgImage)
+            thumbnailCache.setObject(image, forKey: sourcePath as NSString)
+            return image
+        }.value
+    }
+
+    static func waveform(for sourcePath: String) async -> [CGFloat] {
+        guard !sourcePath.isEmpty else { return [] }
+
+        if let cached = waveformCache.object(forKey: sourcePath as NSString) as? [NSNumber] {
+            return cached.map { CGFloat(truncating: $0) }
+        }
+
+        return await Task<[CGFloat], Never>.detached(priority: .utility) {
+            let values = generateWaveformSamples(sourcePath: sourcePath)
+            waveformCache.setObject(values.map(NSNumber.init(value:)) as NSArray, forKey: sourcePath as NSString)
+            return values.map { CGFloat($0) }
+        }.value
+    }
+
+    private static func generateWaveformSamples(sourcePath: String) -> [Double] {
+        let url = URL(fileURLWithPath: sourcePath)
+        let asset = AVURLAsset(url: url)
+        guard let track = asset.tracks(withMediaType: .audio).first,
+              let reader = try? AVAssetReader(asset: asset) else {
+            return []
+        }
+
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ]
+
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+        output.alwaysCopiesSampleData = false
+
+        guard reader.canAdd(output) else {
+            return []
+        }
+
+        reader.add(output)
+        guard reader.startReading() else {
+            return []
+        }
+
+        var amplitudes: [Double] = []
+        let targetBarCount = 28
+        let sampleStride = 1024
+
+        while let sampleBuffer = output.copyNextSampleBuffer(),
+              let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
+            let length = CMBlockBufferGetDataLength(blockBuffer)
+            var data = Data(repeating: 0, count: length)
+
+            data.withUnsafeMutableBytes { bytes in
+                guard let baseAddress = bytes.baseAddress else { return }
+                CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: baseAddress)
+            }
+
+            data.withUnsafeBytes { bytes in
+                guard let samples = bytes.bindMemory(to: Int16.self).baseAddress else { return }
+                let count = length / MemoryLayout<Int16>.size
+                guard count > 0 else { return }
+
+                var index = 0
+                while index < count {
+                    let end = min(index + sampleStride, count)
+                    var peak = 0.0
+
+                    for sampleIndex in index..<end {
+                        let value = Double(abs(Int(samples[sampleIndex])))
+                        peak = max(peak, value / Double(Int16.max))
+                    }
+
+                    amplitudes.append(peak)
+                    index = end
+                }
+            }
+
+            CMSampleBufferInvalidate(sampleBuffer)
+        }
+
+        guard !amplitudes.isEmpty else { return [] }
+
+        let bucketSize = max(amplitudes.count / targetBarCount, 1)
+        var buckets: [Double] = []
+        var bucketIndex = 0
+
+        while bucketIndex < amplitudes.count {
+            let end = min(bucketIndex + bucketSize, amplitudes.count)
+            let bucket = amplitudes[bucketIndex..<end]
+            let average = bucket.reduce(0, +) / Double(bucket.count)
+            buckets.append(max(0.16, min(average * 1.6, 1.0)))
+            bucketIndex = end
+        }
+
+        if buckets.count > targetBarCount {
+            return Array(buckets.prefix(targetBarCount))
+        }
+
+        if buckets.count < targetBarCount {
+            return buckets + Array(repeating: 0.16, count: targetBarCount - buckets.count)
+        }
+
+        return buckets
     }
 }
 

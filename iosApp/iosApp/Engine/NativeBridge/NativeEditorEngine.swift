@@ -75,12 +75,122 @@ final class NativeEditorEngine {
         timelineEngine.snapshot()
     }
 
+    func ensureTrack(_ track: Track) {
+        if !timelineEngine.hasTrack(id: track.id) {
+            timelineEngine.addTrack(track)
+        }
+    }
+
+    @discardableResult
+    func ensureClip(_ clip: any ClipProtocol, in track: Track) -> Bool {
+        ensureTrack(track)
+        if timelineEngine.hasClip(id: clip.id) {
+            return true
+        }
+        return timelineEngine.addClip(clip, to: track)
+    }
+
+    @discardableResult
+    func addClip(
+        _ clip: any ClipProtocol,
+        toTrackType type: TrackType,
+        named name: String
+    ) -> Bool {
+        let track = existingTrack(for: type) ?? Track(
+            type: type,
+            layer: defaultLayer(for: type),
+            name: name
+        )
+        ensureTrack(track)
+        return timelineEngine.addClip(clip, to: track)
+    }
+
+    @discardableResult
+    func removeTrack(id: UUID) -> Bool {
+        timelineEngine.removeTrack(id: id)
+    }
+
+    @discardableResult
+    func setTrackMuted(id: UUID, muted: Bool) -> Bool {
+        timelineEngine.setTrackMuted(id: id, muted: muted)
+    }
+
+    @discardableResult
+    func setTrackLocked(id: UUID, locked: Bool) -> Bool {
+        timelineEngine.setTrackLocked(id: id, locked: locked)
+    }
+
     @discardableResult
     func removeClip(id: UUID) -> Bool {
         timelineEngine.removeClip(id: id)
     }
 
+    @discardableResult
+    func rippleDeleteClip(id: UUID) -> Bool {
+        timelineEngine.rippleDeleteClip(id: id)
+    }
+
+    @discardableResult
+    func moveClip(id: UUID, timelineStartSeconds: Double) -> Bool {
+        timelineEngine.moveClip(id: id, timelineStartSeconds: timelineStartSeconds)
+    }
+
+    @discardableResult
+    func trimClip(id: UUID, sourceStartSeconds: Double, sourceDurationSeconds: Double) -> Bool {
+        timelineEngine.trimClip(
+            id: id,
+            sourceStartSeconds: sourceStartSeconds,
+            sourceDurationSeconds: sourceDurationSeconds
+        )
+    }
+
     func splitClip(id: UUID, at time: Double) -> String? {
         timelineEngine.splitClip(id: id, at: time)
+    }
+
+    var canUndo: Bool {
+        timelineEngine.canUndo
+    }
+
+    var canRedo: Bool {
+        timelineEngine.canRedo
+    }
+
+    @discardableResult
+    func undo() -> Bool {
+        timelineEngine.undo()
+    }
+
+    @discardableResult
+    func redo() -> Bool {
+        timelineEngine.redo()
+    }
+
+    private func existingTrack(for type: TrackType) -> Track? {
+        timelineSnapshot().tracks.first { $0.type == type.nativeBridgeName }.flatMap { snapshot in
+            Track(
+                id: snapshot.id,
+                type: type,
+                layer: TrackLayer(rawValue: snapshot.layer) ?? defaultLayer(for: type),
+                name: snapshot.name,
+                isMuted: snapshot.muted,
+                isLocked: snapshot.locked
+            )
+        }
+    }
+
+    private func defaultLayer(for type: TrackType) -> TrackLayer {
+        switch type {
+        case .video:
+            return .videoMain
+        case .audio:
+            return .audioMusic
+        case .text:
+            return .textOverlay
+        case .overlay:
+            return .videoOverlay
+        case .effect:
+            return .effectGlobal
+        }
     }
 }

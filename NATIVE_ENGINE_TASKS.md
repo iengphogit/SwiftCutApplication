@@ -11,17 +11,31 @@ Done:
 - native C++ timeline core added
 - Objective-C++ timeline and preview bridges added
 - Swift `NativeEditorEngine` facade added for UI-facing native access
-- native timeline supports add-track, add-clip, remove-clip, and split-clip
-- timeline UI now has a visible play or pause control and centered playhead
+- opening a project now routes to the timeline editor screen
+- native timeline supports:
+  - add-track
+  - add-clip/import
+  - add text/debug clip
+  - remove-clip
+  - ripple delete
+  - move-clip
+  - trim-clip
+  - split-clip
+  - mute, lock, and remove-track
+  - undo and redo
+- timeline UI now has:
+  - a visible play/pause control
+  - centered playhead
+  - real clip thumbnails for video/overlay clips
+  - capsule-bar waveforms for audio clips
+  - native snapshot-backed track and clip rows
 
 Not done yet:
 
-- native move-clip
-- native trim-clip
-- native lock, mute, and remove-track ownership
-- native undo and redo
 - native composition engine ownership for preview and export
 - native timeline as the only source of truth
+- removing the old studio screen from the active editing flow entirely
+- reducing Swift-to-native resync dependency during editor refresh
 
 ## Phase 1: Stabilize TimelineEngine
 
@@ -160,10 +174,10 @@ Exit criteria:
 
 Highest priority:
 
-1. move `moveClip` into the C++ timeline core
-2. move `trimClip` into the C++ timeline core
-3. add native undo and redo
-4. switch the editor to read timeline snapshots from the native facade
+1. stop syncing Swift timeline into native on normal editor refresh
+2. make native timeline the only edit source of truth
+3. move preview composition to consume native composition data instead of rebuilt Swift state
+4. remove or repurpose the old `StudioScreen` so the active editor surface is unambiguous
 
 ## Non-Goals Right Now
 

@@ -40,6 +40,18 @@
     _engine.addTrack(track);
 }
 
+- (BOOL)removeTrackWithId:(NSString *)trackId {
+    return _engine.removeTrack(trackId.UTF8String);
+}
+
+- (BOOL)muteTrackWithId:(NSString *)trackId muted:(BOOL)muted {
+    return _engine.setTrackMuted(trackId.UTF8String, muted);
+}
+
+- (BOOL)lockTrackWithId:(NSString *)trackId locked:(BOOL)locked {
+    return _engine.setTrackLocked(trackId.UTF8String, locked);
+}
+
 - (BOOL)addClipToTrackWithId:(NSString *)trackId
                       clipId:(NSString *)clipId
                         name:(NSString *)name
@@ -69,6 +81,25 @@
     return _engine.removeClip(clipId.UTF8String);
 }
 
+- (BOOL)rippleDeleteClipWithId:(NSString *)clipId {
+    return _engine.rippleDeleteClip(clipId.UTF8String);
+}
+
+- (BOOL)moveClipWithId:(NSString *)clipId
+    timelineStartSeconds:(double)timelineStartSeconds {
+    return _engine.moveClip(clipId.UTF8String, timelineStartSeconds);
+}
+
+- (BOOL)trimClipWithId:(NSString *)clipId
+    sourceStartSeconds:(double)sourceStartSeconds
+  sourceDurationSeconds:(double)sourceDurationSeconds {
+    return _engine.trimClip(
+        clipId.UTF8String,
+        sourceStartSeconds,
+        sourceDurationSeconds
+    );
+}
+
 - (NSString * _Nullable)splitClipWithId:(NSString *)clipId
                         splitTimeSeconds:(double)splitTimeSeconds {
     std::string newClipId;
@@ -77,6 +108,22 @@
         return nil;
     }
     return [NSString stringWithUTF8String:newClipId.c_str()];
+}
+
+- (BOOL)canUndo {
+    return _engine.canUndo();
+}
+
+- (BOOL)canRedo {
+    return _engine.canRedo();
+}
+
+- (BOOL)undo {
+    return _engine.undo();
+}
+
+- (BOOL)redo {
+    return _engine.redo();
 }
 
 - (NSDictionary<NSString *, id> *)snapshotDictionary {

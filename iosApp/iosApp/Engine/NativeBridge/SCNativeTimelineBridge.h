@@ -15,6 +15,9 @@ NS_ASSUME_NONNULL_BEGIN
                  layer:(NSInteger)layer
                  muted:(BOOL)muted
                 locked:(BOOL)locked;
+- (BOOL)removeTrackWithId:(NSString *)trackId;
+- (BOOL)muteTrackWithId:(NSString *)trackId muted:(BOOL)muted;
+- (BOOL)lockTrackWithId:(NSString *)trackId locked:(BOOL)locked;
 - (BOOL)addClipToTrackWithId:(NSString *)trackId
                       clipId:(NSString *)clipId
                         name:(NSString *)name
@@ -27,8 +30,18 @@ NS_ASSUME_NONNULL_BEGIN
                        speed:(double)speed
                      enabled:(BOOL)enabled;
 - (BOOL)removeClipWithId:(NSString *)clipId;
+- (BOOL)rippleDeleteClipWithId:(NSString *)clipId;
+- (BOOL)moveClipWithId:(NSString *)clipId
+    timelineStartSeconds:(double)timelineStartSeconds;
+- (BOOL)trimClipWithId:(NSString *)clipId
+    sourceStartSeconds:(double)sourceStartSeconds
+  sourceDurationSeconds:(double)sourceDurationSeconds;
 - (NSString * _Nullable)splitClipWithId:(NSString *)clipId
                         splitTimeSeconds:(double)splitTimeSeconds;
+- (BOOL)canUndo;
+- (BOOL)canRedo;
+- (BOOL)undo;
+- (BOOL)redo;
 - (NSDictionary<NSString *, id> *)snapshotDictionary;
 
 @end

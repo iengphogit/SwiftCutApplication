@@ -1,9 +1,32 @@
 import Foundation
 
 struct NativeTimelineSnapshot {
+    let canvasWidth: Int
+    let canvasHeight: Int
+    let frameRate: Int
     let trackCount: Int
     let clipCount: Int
     let durationSeconds: Double
+    let tracks: [NativeTrackSnapshot]
+}
+
+struct NativeTrackSnapshot: Identifiable {
+    let id: UUID
+    let name: String
+    let type: String
+    let layer: Int
+    let muted: Bool
+    let locked: Bool
+    let clips: [NativeClipSnapshot]
+}
+
+struct NativeClipSnapshot: Identifiable {
+    let id: UUID
+    let name: String
+    let type: String
+    let timelineStart: Double
+    let timelineDuration: Double
+    let sourcePath: String
 }
 
 @MainActor
@@ -50,10 +73,15 @@ final class NativeTimelineEngine {
 
     func snapshot() -> NativeTimelineSnapshot {
         let dictionary = bridge.snapshotDictionary()
+        let trackDictionaries = dictionary["tracks"] as? [[String: Any]] ?? []
         return NativeTimelineSnapshot(
+            canvasWidth: dictionary["canvasWidth"] as? Int ?? 1080,
+            canvasHeight: dictionary["canvasHeight"] as? Int ?? 1920,
+            frameRate: dictionary["frameRate"] as? Int ?? 30,
             trackCount: dictionary["trackCount"] as? Int ?? 0,
             clipCount: dictionary["clipCount"] as? Int ?? 0,
-            durationSeconds: dictionary["durationSeconds"] as? Double ?? 0
+            durationSeconds: dictionary["durationSeconds"] as? Double ?? 0,
+            tracks: trackDictionaries.compactMap(NativeTrackSnapshot.init(dictionary:))
         )
     }
 
@@ -80,6 +108,24 @@ final class NativeTimelineEngine {
             muted: track.isMuted,
             locked: track.isLocked
         )
+    }
+
+    @discardableResult
+    func removeTrack(id: UUID) -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.removeTrack(withId: id.uuidString)
+    }
+
+    @discardableResult
+    func setTrackMuted(id: UUID, muted: Bool) -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.muteTrack(withId: id.uuidString, muted: muted)
+    }
+
+    @discardableResult
+    func setTrackLocked(id: UUID, locked: Bool) -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.lockTrack(withId: id.uuidString, locked: locked)
     }
 
     @discardableResult
@@ -111,13 +157,104 @@ final class NativeTimelineEngine {
         return bridge.removeClip(withId: id.uuidString)
     }
 
+    @discardableResult
+    func rippleDeleteClip(id: UUID) -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.rippleDeleteClip(withId: id.uuidString)
+    }
+
+    @discardableResult
+    func moveClip(id: UUID, timelineStartSeconds: Double) -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.moveClip(withId: id.uuidString, timelineStartSeconds: timelineStartSeconds)
+    }
+
+    @discardableResult
+    func trimClip(id: UUID, sourceStartSeconds: Double, sourceDurationSeconds: Double) -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.trimClip(
+            withId: id.uuidString,
+            sourceStartSeconds: sourceStartSeconds,
+            sourceDurationSeconds: sourceDurationSeconds
+        )
+    }
+
     func splitClip(id: UUID, at time: Double) -> String? {
         guard isSynchronized else { return nil }
         return bridge.splitClip(withId: id.uuidString, splitTimeSeconds: time)
     }
+
+    var canUndo: Bool {
+        guard isSynchronized else { return false }
+        return bridge.canUndo()
+    }
+
+    var canRedo: Bool {
+        guard isSynchronized else { return false }
+        return bridge.canRedo()
+    }
+
+    @discardableResult
+    func undo() -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.undo()
+    }
+
+    @discardableResult
+    func redo() -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.redo()
+    }
 }
 
-private extension TrackType {
+private extension NativeTrackSnapshot {
+    init?(dictionary: [String: Any]) {
+        guard
+            let idString = dictionary["id"] as? String,
+            let id = UUID(uuidString: idString),
+            let name = dictionary["name"] as? String,
+            let type = dictionary["type"] as? String,
+            let layer = dictionary["layer"] as? Int,
+            let muted = dictionary["muted"] as? Bool,
+            let locked = dictionary["locked"] as? Bool
+        else {
+            return nil
+        }
+
+        let clipDictionaries = dictionary["clips"] as? [[String: Any]] ?? []
+        self.id = id
+        self.name = name
+        self.type = type
+        self.layer = layer
+        self.muted = muted
+        self.locked = locked
+        self.clips = clipDictionaries.compactMap(NativeClipSnapshot.init(dictionary:))
+    }
+}
+
+private extension NativeClipSnapshot {
+    init?(dictionary: [String: Any]) {
+        guard
+            let idString = dictionary["id"] as? String,
+            let id = UUID(uuidString: idString),
+            let name = dictionary["name"] as? String,
+            let type = dictionary["type"] as? String,
+            let timelineStart = dictionary["timelineStart"] as? Double,
+            let timelineDuration = dictionary["timelineDuration"] as? Double
+        else {
+            return nil
+        }
+
+        self.id = id
+        self.name = name
+        self.type = type
+        self.timelineStart = timelineStart
+        self.timelineDuration = timelineDuration
+        self.sourcePath = dictionary["sourcePath"] as? String ?? ""
+    }
+}
+
+extension TrackType {
     var nativeBridgeName: String {
         switch self {
         case .video:
@@ -134,7 +271,7 @@ private extension TrackType {
     }
 }
 
-private extension ClipProtocol {
+extension ClipProtocol {
     var nativeDisplayName: String {
         switch self {
         case let textClip as TextClip:
