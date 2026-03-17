@@ -110,36 +110,36 @@ class TimelineEditorViewModel: ObservableObject {
         engine.setTimeline(
             Timeline(
                 name: project.name,
+                settings: TimelineSettings(
+                    canvasSize: project.aspectRatio.canvasSize(for: project.resolution),
+                    frameRate: project.frameRate.framesPerSecond,
+                    backgroundColor: CGColor(gray: 0, alpha: 1)
+                ),
                 tracks: [
                     Track(type: .video, layer: .videoMain, name: "Video")
                 ]
             )
         )
+        nativeEditorEngine.syncTimeline(from: engine.timeline)
         currentTime = .zero
         duration = .zero
         tracks = []
+        refreshDisplay()
 
-        let kind: PickedMediaKind
-        let destination: ImportDestination
-
-        switch project.mediaKind {
-        case .video, .image:
-            kind = .video
-            destination = .video
-        case .audio:
-            kind = .video
-            destination = .audio
-        }
-
-        importMedia(
-            url: project.mediaUrl,
-            kind: kind,
-            destination: destination,
-            extractAudioFromVideo: true,
-            at: .zero
-        ) { [weak self] in
+        loadProjectIntoSwiftTimeline(project) { [weak self] in
             self?.isProjectLoading = false
         }
+    }
+
+    func updateProjectOutputSettings(
+        aspectRatio: AspectRatio,
+        resolution: UhdResolution,
+        frameRate: UhdFrameRate
+    ) {
+        applyTimelineOutputSettings(
+            canvasSize: aspectRatio.canvasSize(for: resolution),
+            frameRate: frameRate.framesPerSecond
+        )
     }
     
     func splitAtPlayhead() {
@@ -503,6 +503,12 @@ class TimelineEditorViewModel: ObservableObject {
     func exportVideo() {
         do {
             let composition = try engine.buildComposition()
+            let videoComposition = AVMutableVideoComposition(propertiesOf: composition)
+            videoComposition.renderSize = engine.timeline.settings.canvasSize
+            videoComposition.frameDuration = CMTime(
+                value: 1,
+                timescale: CMTimeScale(max(engine.timeline.settings.frameRate, 1))
+            )
             
             let exportSession = AVAssetExportSession(
                 asset: composition,
@@ -514,6 +520,7 @@ class TimelineEditorViewModel: ObservableObject {
             
             exportSession?.outputURL = outputURL
             exportSession?.outputFileType = .mp4
+            exportSession?.videoComposition = videoComposition
             
             exportSession?.exportAsynchronously {
                 DispatchQueue.main.async {
@@ -556,6 +563,30 @@ class TimelineEditorViewModel: ObservableObject {
         canRedo = nativeEditorEngine.canRedo
 
         refreshCompositionFrame(at: currentTime)
+    }
+
+    private func applyTimelineOutputSettings(canvasSize: CGSize, frameRate: Int) {
+        let currentTimeline = engine.timeline
+        guard currentTimeline.settings.canvasSize != canvasSize ||
+                currentTimeline.settings.frameRate != frameRate else {
+            return
+        }
+
+        let updatedTimeline = Timeline(
+            id: currentTimeline.id,
+            name: currentTimeline.name,
+            createdAt: currentTimeline.createdAt,
+            modifiedAt: Date(),
+            settings: TimelineSettings(
+                canvasSize: canvasSize,
+                frameRate: frameRate,
+                backgroundColor: currentTimeline.settings.backgroundColor
+            ),
+            tracks: currentTimeline.tracks
+        )
+        engine.setTimeline(updatedTimeline)
+        nativeEditorEngine.syncTimeline(from: updatedTimeline)
+        refreshDisplay()
     }
     
 }
@@ -820,10 +851,13 @@ private extension TimelineEditorViewModel {
 
             var error: NSError?
             let durationStatus = asset.statusOfValue(forKey: "duration", error: &error)
+            let tracksStatus = asset.statusOfValue(forKey: "tracks", error: &error)
 
-            guard durationStatus == .loaded else {
+            guard durationStatus == .loaded, tracksStatus == .loaded else {
                 DispatchQueue.main.async {
-                    AppLogger.log("Import error: \(error?.localizedDescription ?? "Failed to load asset duration")")
+                    AppLogger.log(
+                        "Import error: \(error?.localizedDescription ?? "Failed to load asset duration/tracks")"
+                    )
                     completion?()
                 }
                 return
@@ -875,7 +909,27 @@ private extension TimelineEditorViewModel {
 
             DispatchQueue.main.async {
                 guard didAddClip else {
-                    AppLogger.log("Import error: Failed to add clip to native timeline")
+                    self.fallbackImportClip(
+                        from: url,
+                        trackType: trackType,
+                        sourceRange: sourceRange,
+                        timelineRange: timelineRange,
+                        linkedClipGroupId: linkedClipGroupId
+                    )
+
+                    if trackType == .video && extractEmbeddedAudio && hasEmbeddedAudio {
+                        self.fallbackImportClip(
+                            from: url,
+                            trackType: .audio,
+                            sourceRange: sourceRange,
+                            timelineRange: timelineRange,
+                            linkedClipGroupId: linkedClipGroupId
+                        )
+                    }
+
+                    self.nativeEditorEngine.syncTimeline(from: self.engine.timeline)
+                    self.refreshDisplay()
+                    AppLogger.log("Import warning: Recovered by syncing Swift timeline after native addClip failure")
                     completion?()
                     return
                 }
@@ -893,7 +947,18 @@ private extension TimelineEditorViewModel {
                     )
 
                     if !didAddAudioClip {
-                        AppLogger.log("Import warning: Failed to extract embedded audio to audio track")
+                        self.applyNativeSnapshotToSwiftTimeline()
+                        self.fallbackImportClip(
+                            from: url,
+                            trackType: .audio,
+                            sourceRange: sourceRange,
+                            timelineRange: timelineRange,
+                            linkedClipGroupId: linkedClipGroupId
+                        )
+                        self.nativeEditorEngine.syncTimeline(from: self.engine.timeline)
+                        AppLogger.log(
+                            "Import warning: Recovered extracted audio by syncing Swift timeline after native addClip failure"
+                        )
                     }
                 }
 
@@ -987,6 +1052,116 @@ private extension TimelineEditorViewModel {
                     abs(videoClip.sourceRange.start.seconds - audioClip.sourceRange.start.seconds) < 0.001 &&
                     abs(videoClip.sourceRange.duration.seconds - audioClip.sourceRange.duration.seconds) < 0.001
             }
+    }
+
+    private func fallbackImportClip(
+        from url: URL,
+        trackType: TrackType,
+        sourceRange: CMTimeRange,
+        timelineRange: CMTimeRange,
+        linkedClipGroupId: UUID?
+    ) {
+        switch trackType {
+        case .video:
+            _ = engine.addClip(
+                VideoClip(
+                    linkedClipGroupId: linkedClipGroupId,
+                    sourceUrl: url,
+                    sourceRange: sourceRange,
+                    timelineRange: timelineRange
+                ),
+                toTrackType: .video,
+                named: "Video"
+            )
+        case .audio:
+            _ = engine.addClip(
+                AudioClip(
+                    linkedClipGroupId: linkedClipGroupId,
+                    sourceUrl: url,
+                    sourceRange: sourceRange,
+                    timelineRange: timelineRange
+                ),
+                toTrackType: .audio,
+                named: "Audio"
+            )
+        case .overlay:
+            _ = engine.addClip(
+                OverlayClip(
+                    sourceUrl: url,
+                    sourceRange: sourceRange,
+                    timelineRange: timelineRange
+                ),
+                toTrackType: .overlay,
+                named: "Overlay"
+            )
+        case .text, .effect:
+            break
+        }
+    }
+
+    private func loadProjectIntoSwiftTimeline(
+        _ project: WorkspaceProject,
+        completion: (() -> Void)? = nil
+    ) {
+        let asset = AVURLAsset(url: project.mediaUrl)
+
+        asset.loadValuesAsynchronously(forKeys: ["duration", "tracks"]) { [weak self] in
+            guard let self else { return }
+
+            var error: NSError?
+            let durationStatus = asset.statusOfValue(forKey: "duration", error: &error)
+            let tracksStatus = asset.statusOfValue(forKey: "tracks", error: &error)
+
+            guard durationStatus == .loaded, tracksStatus == .loaded else {
+                DispatchQueue.main.async {
+                    AppLogger.log(
+                        "Project open import error: \(error?.localizedDescription ?? "Failed to load asset duration/tracks")"
+                    )
+                    completion?()
+                }
+                return
+            }
+
+            let sourceRange = CMTimeRangeMake(start: .zero, duration: asset.duration)
+            let timelineRange = CMTimeRangeMake(start: .zero, duration: asset.duration)
+            let hasEmbeddedAudio = !asset.tracks(withMediaType: .audio).isEmpty
+            let linkedClipGroupId = project.mediaKind == .video && hasEmbeddedAudio ? UUID() : nil
+
+            DispatchQueue.main.async {
+                switch project.mediaKind {
+                case .video, .image:
+                    self.fallbackImportClip(
+                        from: project.mediaUrl,
+                        trackType: .video,
+                        sourceRange: sourceRange,
+                        timelineRange: timelineRange,
+                        linkedClipGroupId: linkedClipGroupId
+                    )
+
+                    if hasEmbeddedAudio {
+                        self.fallbackImportClip(
+                            from: project.mediaUrl,
+                            trackType: .audio,
+                            sourceRange: sourceRange,
+                            timelineRange: timelineRange,
+                            linkedClipGroupId: linkedClipGroupId
+                        )
+                    }
+                case .audio:
+                    self.fallbackImportClip(
+                        from: project.mediaUrl,
+                        trackType: .audio,
+                        sourceRange: sourceRange,
+                        timelineRange: timelineRange,
+                        linkedClipGroupId: nil
+                    )
+                }
+
+                self.nativeEditorEngine.syncTimeline(from: self.engine.timeline)
+                self.refreshDisplay()
+                completion?()
+            }
+        }
     }
 }
 

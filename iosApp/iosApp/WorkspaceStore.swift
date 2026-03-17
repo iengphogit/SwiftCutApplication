@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+import AVFoundation
+import UIKit
 
 struct WorkspaceProject: Identifiable, Hashable {
     let id: UUID
@@ -31,6 +33,20 @@ final class WorkspaceStore: ObservableObject {
     private let legacyProjectsFolder = "Projects"
 
     func load() async {
+        if ProcessInfo.processInfo.arguments.contains("UITEST_SEED_PROJECTS") {
+            let shouldReset = ProcessInfo.processInfo.arguments.contains("UITEST_RESET_WORKSPACE")
+            let storageBaseUrl = storageBaseUrl
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    Self.seedUITestWorkspaceIfNeeded(
+                        at: storageBaseUrl,
+                        resetExistingWorkspace: shouldReset
+                    )
+                    continuation.resume()
+                }
+            }
+        }
+
         let workspaceUrl = workspaceFileUrl
         let loadedProjects = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
@@ -293,6 +309,208 @@ final class WorkspaceStore: ObservableObject {
         try? data.write(to: workspaceFileUrl, options: .atomic)
     }
 
+    private static func seedUITestWorkspaceIfNeeded(
+        at storageBaseUrl: URL,
+        resetExistingWorkspace: Bool
+    ) {
+        let fileManager = FileManager.default
+        let projectsDirectoryUrl = storageBaseUrl.appendingPathComponent("Projects")
+        let workspaceFileUrl = storageBaseUrl.appendingPathComponent("workspace.json")
+
+        if resetExistingWorkspace {
+            try? fileManager.removeItem(at: storageBaseUrl)
+        } else if fileManager.fileExists(atPath: workspaceFileUrl.path) {
+            return
+        }
+
+        try? fileManager.createDirectory(at: projectsDirectoryUrl, withIntermediateDirectories: true)
+
+        let now = Date()
+        let seededProjects: [(Int, String, MediaKind, TimeInterval)] = [
+            (1, "Project 001", .video, -180),
+            (2, "Project 002", .video, -120),
+            (3, "Project 003", .video, -60)
+        ]
+
+        var records: [ProjectRecord] = []
+        for (number, name, mediaKind, offset) in seededProjects {
+            let projectDirectory = projectsDirectoryUrl
+                .appendingPathComponent(projectFolderName(for: number), isDirectory: true)
+            try? fileManager.createDirectory(at: projectDirectory, withIntermediateDirectories: true)
+
+            let mediaUrl = projectDirectory.appendingPathComponent("media.mov")
+            if !fileManager.fileExists(atPath: mediaUrl.path) {
+                createUITestVideo(at: mediaUrl, label: name)
+            }
+
+            records.append(
+                ProjectRecord(
+                    id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", number)) ?? UUID(),
+                    name: name,
+                    mediaPath: mediaUrl.path,
+                    createdAt: now.addingTimeInterval(offset),
+                    isVideo: mediaKind == .video,
+                    mediaKind: mediaKind,
+                    projectNumber: number,
+                    aspectRatio: .ratio16x9,
+                    resolution: .p1080,
+                    frameRate: .fps24,
+                    bitrate: .mbps5
+                )
+            )
+        }
+
+        let record = WorkspaceRecord(projects: records)
+        guard let data = try? JSONEncoder().encode(record) else {
+            return
+        }
+        try? fileManager.createDirectory(at: storageBaseUrl, withIntermediateDirectories: true)
+        try? data.write(to: workspaceFileUrl, options: .atomic)
+    }
+
+    private static func createUITestVideo(at url: URL, label: String) {
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: url)
+
+        let writer: AVAssetWriter
+        do {
+            writer = try AVAssetWriter(url: url, fileType: .mov)
+        } catch {
+            return
+        }
+
+        let size = CGSize(width: 720, height: 1280)
+        let outputSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: Int(size.width),
+            AVVideoHeightKey: Int(size.height)
+        ]
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: outputSettings)
+        input.expectsMediaDataInRealTime = false
+
+        let attributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+            kCVPixelBufferWidthKey as String: Int(size.width),
+            kCVPixelBufferHeightKey as String: Int(size.height),
+            kCVPixelBufferCGImageCompatibilityKey as String: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
+        ]
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: attributes
+        )
+
+        guard writer.canAdd(input) else { return }
+        writer.add(input)
+        guard writer.startWriting() else { return }
+        writer.startSession(atSourceTime: .zero)
+
+        let frameCount = 24
+        let frameDuration = CMTime(value: 1, timescale: 12)
+        for frameIndex in 0..<frameCount {
+            while !input.isReadyForMoreMediaData {
+                Thread.sleep(forTimeInterval: 0.005)
+            }
+            guard let pixelBuffer = makeUITestPixelBuffer(
+                size: size,
+                label: label,
+                frameIndex: frameIndex
+            ) else {
+                continue
+            }
+            let presentationTime = CMTimeMultiply(frameDuration, multiplier: Int32(frameIndex))
+            adaptor.append(pixelBuffer, withPresentationTime: presentationTime)
+        }
+
+        input.markAsFinished()
+
+        let semaphore = DispatchSemaphore(value: 0)
+        writer.finishWriting {
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        if writer.status != .completed {
+            try? fileManager.removeItem(at: url)
+        }
+    }
+
+    private static func makeUITestPixelBuffer(
+        size: CGSize,
+        label: String,
+        frameIndex: Int
+    ) -> CVPixelBuffer? {
+        var pixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            Int(size.width),
+            Int(size.height),
+            kCVPixelFormatType_32BGRA,
+            [
+                kCVPixelBufferCGImageCompatibilityKey: true,
+                kCVPixelBufferCGBitmapContextCompatibilityKey: true
+            ] as CFDictionary,
+            &pixelBuffer
+        )
+        guard status == kCVReturnSuccess, let pixelBuffer else {
+            return nil
+        }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+
+        guard let context = CGContext(
+            data: CVPixelBufferGetBaseAddress(pixelBuffer),
+            width: Int(size.width),
+            height: Int(size.height),
+            bitsPerComponent: 8,
+            bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+        ) else {
+            return nil
+        }
+
+        let colors: [UIColor] = [
+            UIColor(red: 0.16, green: 0.45, blue: 0.95, alpha: 1),
+            UIColor(red: 0.15, green: 0.76, blue: 0.51, alpha: 1),
+            UIColor(red: 0.96, green: 0.64, blue: 0.19, alpha: 1)
+        ]
+        let background = colors[frameIndex % colors.count]
+        context.setFillColor(background.cgColor)
+        context.fill(CGRect(origin: .zero, size: size))
+
+        let stripeHeight = size.height / 5
+        for index in 0..<5 {
+            let alpha = CGFloat(0.08 * Double(index + frameIndex % 3 + 1))
+            context.setFillColor(UIColor.white.withAlphaComponent(alpha).cgColor)
+            context.fill(CGRect(x: 0, y: CGFloat(index) * stripeHeight, width: size.width, height: stripeHeight))
+        }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .left
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 78, weight: .bold),
+            .foregroundColor: UIColor.white,
+            .paragraphStyle: paragraph
+        ]
+        let subtitleAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 32, weight: .medium),
+            .foregroundColor: UIColor.white.withAlphaComponent(0.85)
+        ]
+
+        UIGraphicsPushContext(context)
+        defer { UIGraphicsPopContext() }
+
+        NSString(string: label).draw(in: CGRect(x: 56, y: 96, width: size.width - 112, height: 120), withAttributes: attributes)
+        NSString(string: "Frame \(frameIndex + 1)").draw(
+            in: CGRect(x: 56, y: 196, width: size.width - 112, height: 64),
+            withAttributes: subtitleAttributes
+        )
+
+        return pixelBuffer
+    }
+
 }
 
 struct MediaPayload {
@@ -323,6 +541,29 @@ enum AspectRatio: String, Codable, CaseIterable, Hashable {
     var displayName: String {
         rawValue
     }
+
+    var previewCanvasSize: CGSize {
+        switch self {
+        case .ratio16x9:
+            return CGSize(width: 1920, height: 1080)
+        case .ratio9x16:
+            return CGSize(width: 1080, height: 1920)
+        case .ratio1x1:
+            return CGSize(width: 1080, height: 1080)
+        }
+    }
+
+    func canvasSize(for resolution: UhdResolution) -> CGSize {
+        let longEdge = CGFloat(resolution.longEdgePixels)
+        switch self {
+        case .ratio16x9:
+            return CGSize(width: longEdge, height: round(longEdge * 9.0 / 16.0))
+        case .ratio9x16:
+            return CGSize(width: round(longEdge * 9.0 / 16.0), height: longEdge)
+        case .ratio1x1:
+            return CGSize(width: longEdge, height: longEdge)
+        }
+    }
 }
 
 enum UhdResolution: String, Codable, CaseIterable, Hashable {
@@ -333,6 +574,19 @@ enum UhdResolution: String, Codable, CaseIterable, Hashable {
 
     var displayName: String {
         rawValue
+    }
+
+    var longEdgePixels: Int {
+        switch self {
+        case .p1080:
+            return 1080
+        case .k2:
+            return 2048
+        case .k4:
+            return 3840
+        case .k8:
+            return 7680
+        }
     }
 }
 
@@ -345,6 +599,10 @@ enum UhdFrameRate: String, Codable, CaseIterable, Hashable {
 
     var displayName: String {
         rawValue
+    }
+
+    var framesPerSecond: Int {
+        Int(rawValue) ?? 30
     }
 }
 

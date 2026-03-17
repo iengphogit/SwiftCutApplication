@@ -135,6 +135,11 @@ struct TimelineEditorScreen: View {
                         onSelect: { ratio in
                             selectedRatio = ratio
                             isRatioPanelVisible = false
+                            viewModel.updateProjectOutputSettings(
+                                aspectRatio: ratio,
+                                resolution: selectedResolution,
+                                frameRate: selectedFrameRate
+                            )
                             onUpdateAspectRatio(ratio)
                         }
                     )
@@ -149,10 +154,20 @@ struct TimelineEditorScreen: View {
                     UhdGlassPanel(
                         onSelectResolution: { resolution in
                             selectedResolution = resolution
+                            viewModel.updateProjectOutputSettings(
+                                aspectRatio: selectedRatio,
+                                resolution: resolution,
+                                frameRate: selectedFrameRate
+                            )
                             onUpdateUhdSettings(resolution, selectedFrameRate, selectedBitrate)
                         },
                         onSelectFrameRate: { frameRate in
                             selectedFrameRate = frameRate
+                            viewModel.updateProjectOutputSettings(
+                                aspectRatio: selectedRatio,
+                                resolution: selectedResolution,
+                                frameRate: frameRate
+                            )
                             onUpdateUhdSettings(selectedResolution, frameRate, selectedBitrate)
                         },
                         onSelectBitrate: { bitrate in
@@ -186,7 +201,7 @@ struct TimelineEditorScreen: View {
     private func previewSection(geometry: GeometryProxy) -> some View {
         VStack(spacing: 0) {
             ZStack {
-                Color.black
+                Color(white: 0.22)
 
                 if viewModel.compositionFrame != nil || viewModel.duration.seconds > 0 {
                     NativeEnginePreviewHost(
@@ -201,6 +216,14 @@ struct TimelineEditorScreen: View {
                             viewModel.syncPreviewPlaybackState(playing)
                         }
                     )
+                    .aspectRatio(selectedRatio.ratioValue, contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: geometry.size.height * 0.29)
+                    .background(Color.black)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
                 } else {
                     VStack(spacing: 16) {
                         Image(systemName: "video.badge.plus")
@@ -244,6 +267,11 @@ struct TimelineEditorScreen: View {
                         .font(.system(size: 22, weight: .bold))
                         .foregroundColor(.white.opacity(0.94))
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityIdentifier("timeline-playback-toggle")
+                .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
+                .accessibilityValue(viewModel.isPlaying ? "playing" : "paused")
+                .accessibilityAddTraits(.isButton)
 
                 Spacer()
             }
