@@ -256,42 +256,47 @@ struct TimelineEditorScreen: View {
     
     private var timelineSection: some View {
         GeometryReader { geometry in
-            let leftChannelWidth = geometry.size.width / 2
+            let leftChannelWidth = min(max(162, geometry.size.width * 0.36), 192)
             let rightLanePadding: CGFloat = 10
-            let leadingTimelineInset: CGFloat = 0
+            let rightLaneWidth = geometry.size.width - leftChannelWidth
+            let playheadXInRightLane = max((geometry.size.width / 2) - leftChannelWidth, 0)
+            let leadingTimelineInset = max(playheadXInRightLane - rightLanePadding, 0)
             let timelineWidth = max(
                 viewModel.tracks.timelineContentWidth(zoomScale: zoomScale) + leadingTimelineInset,
-                geometry.size.width - leftChannelWidth
+                rightLaneWidth
             )
 
             VStack(spacing: 0) {
                 timelineHeader
-                ZStack(alignment: .topLeading) {
-                    TimelineHorizontalScrollView(
-                        currentTime: max(viewModel.currentTime.seconds, 0),
-                        pointsPerSecond: 60 * zoomScale,
-                        onTimeChange: { seconds in
-                            viewModel.seek(
-                                to: CMTime(seconds: seconds, preferredTimescale: 600)
-                            )
+                HStack(spacing: 0) {
+                    leftTimelineColumn(leftChannelWidth: leftChannelWidth)
+
+                    ZStack(alignment: .topLeading) {
+                        TimelineHorizontalScrollView(
+                            currentTime: max(viewModel.currentTime.seconds, 0),
+                            pointsPerSecond: 60 * zoomScale,
+                            onTimeChange: { seconds in
+                                viewModel.seek(
+                                    to: CMTime(seconds: seconds, preferredTimescale: 600)
+                                )
+                            }
+                        ) {
+                            VStack(spacing: 0) {
+                                timelineRuler(
+                                    timelineWidth: timelineWidth,
+                                    leadingTimelineInset: leadingTimelineInset,
+                                    rightLanePadding: rightLanePadding
+                                )
+                                tracksView(
+                                    timelineWidth: timelineWidth,
+                                    leadingTimelineInset: leadingTimelineInset,
+                                    rightLanePadding: rightLanePadding
+                                )
+                            }
                         }
-                    ) {
-                        VStack(spacing: 0) {
-                            timelineRuler(
-                                timelineWidth: timelineWidth,
-                                leftChannelWidth: leftChannelWidth,
-                                leadingTimelineInset: leadingTimelineInset,
-                                rightLanePadding: rightLanePadding
-                            )
-                            tracksView(
-                                timelineWidth: timelineWidth,
-                                leftChannelWidth: leftChannelWidth,
-                                leadingTimelineInset: leadingTimelineInset,
-                                rightLanePadding: rightLanePadding
-                            )
-                        }
+                        centeredPlayhead(xInLane: playheadXInRightLane)
                     }
-                    centeredPlayhead()
+                    .frame(width: rightLaneWidth)
                 }
             }
             .background(Color(white: 0.05))
@@ -332,14 +337,9 @@ struct TimelineEditorScreen: View {
         .padding(.vertical, 8)
     }
     
-    private func timelineRuler(
-        timelineWidth: CGFloat,
-        leftChannelWidth: CGFloat,
-        leadingTimelineInset: CGFloat,
-        rightLanePadding: CGFloat
-    ) -> some View {
-        HStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 10)
+    private func leftTimelineColumn(leftChannelWidth: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            Rectangle()
                 .fill(Color.white.opacity(0.06))
                 .frame(width: leftChannelWidth, height: 24)
                 .overlay(
@@ -348,57 +348,74 @@ struct TimelineEditorScreen: View {
                         .foregroundColor(.white.opacity(0.6))
                 )
 
-            HStack(spacing: 0) {
-                Color.clear
-                    .frame(width: leadingTimelineInset)
-
-                ForEach(0..<Int(max(viewModel.duration.seconds + 5, 30)), id: \.self) { second in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.5))
-                            .frame(width: 1, height: second % 5 == 0 ? 12 : 6)
-
-                        if second % 5 == 0 {
-                            Text(formatSecond(second))
-                                .font(.system(size: 8, weight: .medium))
-                                .foregroundColor(.gray)
-                        }
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 8) {
+                    ForEach(viewModel.tracks) { track in
+                        TrackHeaderView(
+                            track: track,
+                            leftChannelWidth: leftChannelWidth,
+                            onToggleMute: {
+                                viewModel.setTrackMuted(track.id, muted: !track.isMuted)
+                            },
+                            onToggleLock: {
+                                viewModel.setTrackLocked(track.id, locked: !track.isLocked)
+                            },
+                            onRemoveTrack: {
+                                viewModel.removeTrack(track.id)
+                            }
+                        )
                     }
-                    .frame(width: 60 * zoomScale)
                 }
+                .padding(.vertical, 8)
             }
-            .padding(.leading, rightLanePadding)
-            .frame(width: timelineWidth, alignment: .leading)
+            .frame(maxHeight: 200)
         }
+    }
+
+    private func timelineRuler(
+        timelineWidth: CGFloat,
+        leadingTimelineInset: CGFloat,
+        rightLanePadding: CGFloat
+    ) -> some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(width: leadingTimelineInset)
+
+            ForEach(0..<Int(max(viewModel.duration.seconds + 5, 30)), id: \.self) { second in
+                VStack(alignment: .leading, spacing: 2) {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.5))
+                        .frame(width: 1, height: second % 5 == 0 ? 12 : 6)
+
+                    if second % 5 == 0 {
+                        Text(formatSecond(second))
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(.gray)
+                    }
+                }
+                .frame(width: 60 * zoomScale)
+            }
+        }
+        .padding(.leading, rightLanePadding)
+        .frame(width: timelineWidth, height: 24, alignment: .leading)
         .frame(height: 24)
     }
     
     private func tracksView(
         timelineWidth: CGFloat,
-        leftChannelWidth: CGFloat,
         leadingTimelineInset: CGFloat,
         rightLanePadding: CGFloat
     ) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 8) {
                 ForEach(viewModel.tracks) { track in
-                    TrackRowView(
+                    TrackLaneView(
                         track: track,
                         timelineWidth: timelineWidth,
-                        leftChannelWidth: leftChannelWidth,
                         leadingTimelineInset: leadingTimelineInset,
                         rightLanePadding: rightLanePadding,
                         zoomScale: zoomScale,
                         selectedClipId: $selectedClipId,
-                        onToggleMute: {
-                            viewModel.setTrackMuted(track.id, muted: !track.isMuted)
-                        },
-                        onToggleLock: {
-                            viewModel.setTrackLocked(track.id, locked: !track.isLocked)
-                        },
-                        onRemoveTrack: {
-                            viewModel.removeTrack(track.id)
-                        },
                         onClipTap: { clipId in
                             selectedClipId = selectedClipId == clipId ? nil : clipId
                         }
@@ -445,45 +462,14 @@ struct TimelineEditorScreen: View {
         return String(format: "%d:%02d", mins, secs)
     }
 
-    private func centeredPlayhead() -> some View {
+    private func centeredPlayhead(xInLane: CGFloat) -> some View {
         GeometryReader { geometry in
-            VStack(spacing: 0) {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.red.opacity(0.12))
-                    .frame(width: 26, height: geometry.size.height)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.red.opacity(0.18), lineWidth: 1)
-                    )
-
-                Capsule()
-                    .fill(Color.red)
-                    .frame(width: 22, height: 10)
-                    .shadow(color: .red.opacity(0.55), radius: 5)
-                
-                Rectangle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.red,
-                                Color.red.opacity(0.95),
-                                Color.red.opacity(0.75)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(width: 4)
-                    .overlay(
-                        Rectangle()
-                            .fill(Color.white.opacity(0.95))
-                            .frame(width: 1.5)
-                    )
-                    .shadow(color: .red.opacity(0.45), radius: 4)
-            }
-            .frame(height: geometry.size.height, alignment: .top)
+            Rectangle()
+                .fill(Color.white.opacity(0.96))
+                .frame(width: 2, height: geometry.size.height)
+                .shadow(color: .white.opacity(0.18), radius: 1)
             .position(
-                x: geometry.size.width / 2,
+                x: min(max(xInLane, 0), geometry.size.width),
                 y: geometry.size.height / 2
             )
         }
@@ -907,62 +893,60 @@ private struct TimelineBottomToolButton: View {
     }
 }
 
-private struct TrackRowView: View {
+private struct TrackLaneView: View {
     let track: TrackDisplayModel
     let timelineWidth: CGFloat
-    let leftChannelWidth: CGFloat
     let leadingTimelineInset: CGFloat
     let rightLanePadding: CGFloat
     let zoomScale: CGFloat
     @Binding var selectedClipId: UUID?
-    let onToggleMute: () -> Void
-    let onToggleLock: () -> Void
-    let onRemoveTrack: () -> Void
     let onClipTap: (UUID) -> Void
     
     var body: some View {
-        HStack(spacing: 0) {
-            trackIcon
-                .frame(width: leftChannelWidth)
+        ZStack(alignment: .leading) {
+            Rectangle()
+                .fill(Color.white.opacity(0.035))
+                .overlay(
+                    Rectangle()
+                        .stroke(Color.white.opacity(0.05), lineWidth: 1)
+                )
 
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.035))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.white.opacity(0.05), lineWidth: 1)
-                    )
-
-                ForEach(track.clips) { clip in
-                    ClipView(
-                        clip: clip,
-                        zoomScale: zoomScale,
-                        isSelected: selectedClipId == clip.id
-                    )
-                    .offset(x: leadingTimelineInset + clip.startOffset(zoomScale: zoomScale))
-                    .onTapGesture {
-                        onClipTap(clip.id)
-                    }
+            ForEach(track.clips) { clip in
+                ClipView(
+                    clip: clip,
+                    zoomScale: zoomScale,
+                    isSelected: selectedClipId == clip.id
+                )
+                .offset(x: leadingTimelineInset + clip.startOffset(zoomScale: zoomScale))
+                .onTapGesture {
+                    onClipTap(clip.id)
                 }
             }
-            .padding(.leading, rightLanePadding)
-            .frame(width: timelineWidth, height: 44, alignment: .leading)
         }
+        .padding(.leading, rightLanePadding)
+        .frame(width: timelineWidth, height: 44, alignment: .leading)
         .frame(height: 52)
         .background(
-            RoundedRectangle(cornerRadius: 10)
+            Rectangle()
                 .fill(Color(white: 0.11))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            Rectangle()
                 .stroke(Color.white.opacity(0.05), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
-    
-    private var trackIcon: some View {
-        HStack(spacing: 6) {
-            HStack(spacing: 6) {
+}
+
+private struct TrackHeaderView: View {
+    let track: TrackDisplayModel
+    let leftChannelWidth: CGFloat
+    let onToggleMute: () -> Void
+    let onToggleLock: () -> Void
+    let onRemoveTrack: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 7)
                         .fill(trackColor(track.type).opacity(0.18))
@@ -978,9 +962,9 @@ private struct TrackRowView: View {
                     .foregroundColor(.white.opacity(0.82))
                     .lineLimit(1)
             }
-            .frame(minWidth: 34, alignment: .trailing)
+            .frame(minWidth: 42, alignment: .trailing)
 
-            HStack(spacing: 6) {
+            HStack(spacing: 10) {
                 channelButton(
                     systemName: track.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
                     tint: track.isMuted ? .yellow.opacity(0.95) : .white.opacity(0.72),
@@ -1003,31 +987,33 @@ private struct TrackRowView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .frame(width: max(leftChannelWidth - 10, 0), alignment: .trailing)
+        .frame(width: max(leftChannelWidth - 26, 0), alignment: .trailing)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-        .padding(.leading, 10)
-        .padding(.trailing, 0)
-        .padding(.vertical, 7)
+        .padding(.leading, 12)
+        .padding(.trailing, 4)
+        .padding(.vertical, 5)
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            Rectangle()
                 .fill(trackColor(track.type).opacity(0.12))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            Rectangle()
                 .stroke(trackColor(track.type).opacity(0.32), lineWidth: 1)
         )
+        .frame(width: leftChannelWidth, height: 52, alignment: .trailing)
     }
 
     private func channelButton(systemName: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 10, weight: .bold))
+                .font(.system(size: 12, weight: .bold))
                 .foregroundColor(tint)
-                .frame(width: 22, height: 22)
+                .frame(width: 32, height: 32)
                 .background(Color.white.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contentShape(Rectangle())
     }
     
     private func iconForType(_ type: TrackType) -> String {
