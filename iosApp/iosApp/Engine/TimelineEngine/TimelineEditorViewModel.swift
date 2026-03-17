@@ -72,6 +72,7 @@ class TimelineEditorViewModel: ObservableObject {
         url: URL,
         kind: PickedMediaKind,
         destination: ImportDestination,
+        extractAudioFromVideo: Bool = true,
         at time: CMTime? = nil,
         completion: (() -> Void)? = nil
     ) {
@@ -90,6 +91,7 @@ class TimelineEditorViewModel: ObservableObject {
             importVideoIntoNativeEngine(
                 from: url,
                 toTrackType: trackType,
+                extractEmbeddedAudio: extractAudioFromVideo,
                 at: time ?? duration,
                 completion: completion
             )
@@ -133,6 +135,7 @@ class TimelineEditorViewModel: ObservableObject {
             url: project.mediaUrl,
             kind: kind,
             destination: destination,
+            extractAudioFromVideo: true,
             at: .zero
         ) { [weak self] in
             self?.isProjectLoading = false
@@ -140,7 +143,11 @@ class TimelineEditorViewModel: ObservableObject {
     }
     
     func splitAtPlayhead() {
-        let affectedClipIds = engine.clips(at: currentTime).map(\.id)
+        let affectedClipIds = Array(Set(
+            engine.clips(at: currentTime).flatMap { clip in
+                [clip.id] + linkedClipIDs(for: clip.id)
+            }
+        ))
         var didNativeSplit = false
 
         for clipId in affectedClipIds {
@@ -162,6 +169,48 @@ class TimelineEditorViewModel: ObservableObject {
     }
     
     func deleteClip(_ clipId: UUID, ripple: Bool = false) {
+        let linkedClipIds = linkedClipIDs(for: clipId)
+
+        if !linkedClipIds.isEmpty {
+            if ripple {
+                for linkedClipId in linkedClipIds {
+                    _ = nativeEditorEngine.removeClip(id: linkedClipId)
+                }
+                let didDeletePrimary = nativeEditorEngine.rippleDeleteClip(id: clipId)
+
+                if didDeletePrimary {
+                    applyNativeSnapshotToSwiftTimeline()
+                    refreshDisplay()
+                    return
+                }
+
+                for linkedClipId in linkedClipIds {
+                    engine.removeClip(linkedClipId, ripple: false)
+                }
+                engine.removeClip(clipId, ripple: true)
+                refreshDisplay()
+                return
+            }
+
+            var didDeleteNatively = nativeEditorEngine.removeClip(id: clipId)
+            for linkedClipId in linkedClipIds {
+                didDeleteNatively = nativeEditorEngine.removeClip(id: linkedClipId) && didDeleteNatively
+            }
+
+            if didDeleteNatively {
+                applyNativeSnapshotToSwiftTimeline()
+                refreshDisplay()
+                return
+            }
+
+            engine.removeClip(clipId, ripple: false)
+            for linkedClipId in linkedClipIds {
+                engine.removeClip(linkedClipId, ripple: false)
+            }
+            refreshDisplay()
+            return
+        }
+
         let didDeleteNatively = ripple
             ? nativeEditorEngine.rippleDeleteClip(id: clipId)
             : nativeEditorEngine.removeClip(id: clipId)
@@ -174,6 +223,120 @@ class TimelineEditorViewModel: ObservableObject {
 
         engine.removeClip(clipId, ripple: ripple)
         refreshDisplay()
+    }
+
+    func moveClip(_ clipId: UUID, to time: CMTime) {
+        let linkedClipIds = linkedClipIDs(for: clipId)
+        let clampedStartTime = max(.zero, time)
+
+        if !linkedClipIds.isEmpty {
+            var didMoveNatively = nativeEditorEngine.moveClip(
+                id: clipId,
+                timelineStartSeconds: clampedStartTime.seconds
+            )
+            for linkedClipId in linkedClipIds {
+                didMoveNatively = nativeEditorEngine.moveClip(
+                    id: linkedClipId,
+                    timelineStartSeconds: clampedStartTime.seconds
+                ) && didMoveNatively
+            }
+
+            if didMoveNatively {
+                applyNativeSnapshotToSwiftTimeline()
+                refreshDisplay()
+                return
+            }
+
+            engine.moveClip(clipId, to: clampedStartTime)
+            for linkedClipId in linkedClipIds {
+                engine.moveClip(linkedClipId, to: clampedStartTime)
+            }
+            refreshDisplay()
+            return
+        }
+
+        if nativeEditorEngine.moveClip(id: clipId, timelineStartSeconds: clampedStartTime.seconds) {
+            applyNativeSnapshotToSwiftTimeline()
+            refreshDisplay()
+            return
+        }
+
+        engine.moveClip(clipId, to: clampedStartTime)
+        refreshDisplay()
+    }
+
+    func trimClip(_ clipId: UUID, sourceRange: CMTimeRange) {
+        let linkedClipIds = linkedClipIDs(for: clipId)
+
+        if !linkedClipIds.isEmpty {
+            var didTrimNatively = nativeEditorEngine.trimClip(
+                id: clipId,
+                sourceStartSeconds: sourceRange.start.seconds,
+                sourceDurationSeconds: sourceRange.duration.seconds
+            )
+            for linkedClipId in linkedClipIds {
+                didTrimNatively = nativeEditorEngine.trimClip(
+                    id: linkedClipId,
+                    sourceStartSeconds: sourceRange.start.seconds,
+                    sourceDurationSeconds: sourceRange.duration.seconds
+                ) && didTrimNatively
+            }
+
+            if didTrimNatively {
+                applyNativeSnapshotToSwiftTimeline()
+                refreshDisplay()
+                return
+            }
+
+            engine.trimClip(clipId, sourceRange: sourceRange)
+            for linkedClipId in linkedClipIds {
+                engine.trimClip(linkedClipId, sourceRange: sourceRange)
+            }
+            refreshDisplay()
+            return
+        }
+
+        if nativeEditorEngine.trimClip(
+            id: clipId,
+            sourceStartSeconds: sourceRange.start.seconds,
+            sourceDurationSeconds: sourceRange.duration.seconds
+        ) {
+            applyNativeSnapshotToSwiftTimeline()
+            refreshDisplay()
+            return
+        }
+
+        engine.trimClip(clipId, sourceRange: sourceRange)
+        refreshDisplay()
+    }
+
+    func trimClipLeadingEdge(
+        _ clipId: UUID,
+        timelineStartSeconds: Double,
+        sourceStartSeconds: Double,
+        sourceDurationSeconds: Double
+    ) {
+        let sourceRange = CMTimeRange(
+            start: CMTime(seconds: max(0, sourceStartSeconds), preferredTimescale: 600),
+            duration: CMTime(seconds: max(0.05, sourceDurationSeconds), preferredTimescale: 600)
+        )
+        trimClip(clipId, sourceRange: sourceRange)
+        moveClip(
+            clipId,
+            to: CMTime(seconds: max(0, timelineStartSeconds), preferredTimescale: 600)
+        )
+    }
+
+    func trimClipTrailingEdge(
+        _ clipId: UUID,
+        sourceStartSeconds: Double,
+        sourceDurationSeconds: Double
+    ) {
+        let sourceRange = CMTimeRange(
+            start: CMTime(seconds: max(0, sourceStartSeconds), preferredTimescale: 600),
+            duration: CMTime(seconds: max(0.05, sourceDurationSeconds), preferredTimescale: 600)
+        )
+        trimClip(clipId, sourceRange: sourceRange)
     }
 
     func undo() {
@@ -237,6 +400,44 @@ class TimelineEditorViewModel: ObservableObject {
         }
 
         engine.addDebugClip()
+        refreshDisplay()
+    }
+
+    func canExtractAudio(from clipId: UUID) -> Bool {
+        guard let (_, clip) = engine.timeline.clip(for: clipId),
+              let videoClip = clip as? VideoClip else {
+            return false
+        }
+
+        return !hasMatchingAudioClip(for: videoClip)
+    }
+
+    func extractAudio(from clipId: UUID) {
+        guard let (_, clip) = engine.timeline.clip(for: clipId),
+              let videoClip = clip as? VideoClip,
+              !hasMatchingAudioClip(for: videoClip) else {
+            return
+        }
+
+        let linkedClipGroupId = videoClip.linkedClipGroupId ?? UUID()
+
+        let didAddAudioClip = nativeEditorEngine.addClip(
+            AudioClip(
+                linkedClipGroupId: linkedClipGroupId,
+                sourceUrl: videoClip.sourceUrl,
+                sourceRange: videoClip.sourceRange,
+                timelineRange: videoClip.timelineRange
+            ),
+            toTrackType: .audio,
+            named: "Audio"
+        )
+
+        guard didAddAudioClip else {
+            AppLogger.log("Extract audio error: Failed to add extracted audio clip")
+            return
+        }
+
+        applyNativeSnapshotToSwiftTimeline()
         refreshDisplay()
     }
 
@@ -374,6 +575,8 @@ struct ClipDisplayModel: Identifiable {
     let name: String
     let startSeconds: Double
     let durationSeconds: Double
+    let sourceStartSeconds: Double
+    let sourceDurationSeconds: Double
     let sourcePath: String
     let hasThumbnail: Bool
 }
@@ -411,6 +614,11 @@ private extension TimelineEditorViewModel {
 
     private func applyNativeSnapshotToSwiftTimeline() {
         let currentTimeline = engine.timeline
+        let existingClipsByID = Dictionary(
+            uniqueKeysWithValues: currentTimeline.tracks
+                .flatMap(\.clips)
+                .map { ($0.id, $0) }
+        )
         let rebuiltTimeline = Timeline(
             id: currentTimeline.id,
             name: currentTimeline.name,
@@ -442,13 +650,27 @@ private extension TimelineEditorViewModel {
                         start: CMTime(seconds: nativeClip.timelineStart, preferredTimescale: 600),
                         duration: CMTime(seconds: nativeClip.timelineDuration, preferredTimescale: 600)
                     )
-                    let sourceRange = CMTimeRange(start: .zero, duration: timelineRange.duration)
+                    let existingClip = existingClipsByID[nativeClip.id]
+                    let sourceRange = existingClip?.sourceRange ?? CMTimeRange(
+                        start: CMTime(seconds: nativeClip.sourceStart, preferredTimescale: 600),
+                        duration: CMTime(seconds: nativeClip.sourceDuration, preferredTimescale: 600)
+                    )
+                    let linkedClipGroupId = {
+                        if let videoClip = existingClip as? VideoClip {
+                            return videoClip.linkedClipGroupId
+                        }
+                        if let audioClip = existingClip as? AudioClip {
+                            return audioClip.linkedClipGroupId
+                        }
+                        return nil
+                    }()
 
                     switch clipType {
                     case .video:
                         guard let sourceURL else { return nil }
                         return VideoClip(
                             id: nativeClip.id,
+                            linkedClipGroupId: linkedClipGroupId,
                             sourceUrl: sourceURL,
                             sourceRange: sourceRange,
                             timelineRange: timelineRange
@@ -457,6 +679,7 @@ private extension TimelineEditorViewModel {
                         guard let sourceURL else { return nil }
                         return AudioClip(
                             id: nativeClip.id,
+                            linkedClipGroupId: linkedClipGroupId,
                             sourceUrl: sourceURL,
                             sourceRange: sourceRange,
                             timelineRange: timelineRange
@@ -516,6 +739,8 @@ private extension TimelineEditorViewModel {
                         name: nativeClip.name,
                         startSeconds: nativeClip.timelineStart,
                         durationSeconds: nativeClip.timelineDuration,
+                        sourceStartSeconds: nativeClip.sourceStart,
+                        sourceDurationSeconds: nativeClip.sourceDuration,
                         sourcePath: nativeClip.sourcePath,
                         hasThumbnail: clipType == .video || clipType == .overlay
                     )
@@ -541,6 +766,8 @@ private extension TimelineEditorViewModel {
                         name: clipName(clip),
                         startSeconds: clip.timelineRange.start.seconds,
                         durationSeconds: clip.timelineRange.duration.seconds,
+                        sourceStartSeconds: clip.sourceRange.start.seconds,
+                        sourceDurationSeconds: clip.sourceRange.duration.seconds,
                         sourcePath: clip.nativeSourcePath ?? "",
                         hasThumbnail: track.type == .video || track.type == .overlay
                     )
@@ -582,6 +809,7 @@ private extension TimelineEditorViewModel {
     private func importVideoIntoNativeEngine(
         from url: URL,
         toTrackType trackType: TrackType,
+        extractEmbeddedAudio: Bool,
         at time: CMTime,
         completion: (() -> Void)? = nil
     ) {
@@ -604,12 +832,16 @@ private extension TimelineEditorViewModel {
             let sourceRange = CMTimeRangeMake(start: .zero, duration: asset.duration)
             let timelineRange = CMTimeRangeMake(start: time, duration: asset.duration)
             let hasEmbeddedAudio = !asset.tracks(withMediaType: .audio).isEmpty
+            let linkedClipGroupId = trackType == .video && extractEmbeddedAudio && hasEmbeddedAudio
+                ? UUID()
+                : nil
 
             let didAddClip: Bool
             switch trackType {
             case .video:
                 didAddClip = self.nativeEditorEngine.addClip(
                     VideoClip(
+                        linkedClipGroupId: linkedClipGroupId,
                         sourceUrl: url,
                         sourceRange: sourceRange,
                         timelineRange: timelineRange
@@ -648,9 +880,10 @@ private extension TimelineEditorViewModel {
                     return
                 }
 
-                if trackType == .video && hasEmbeddedAudio {
+                if trackType == .video && extractEmbeddedAudio && hasEmbeddedAudio {
                     let didAddAudioClip = self.nativeEditorEngine.addClip(
                         AudioClip(
+                            linkedClipGroupId: linkedClipGroupId,
                             sourceUrl: url,
                             sourceRange: sourceRange,
                             timelineRange: timelineRange
@@ -669,6 +902,91 @@ private extension TimelineEditorViewModel {
                 completion?()
             }
         }
+    }
+
+    private func hasMatchingAudioClip(for videoClip: VideoClip) -> Bool {
+        if let linkedClipGroupId = videoClip.linkedClipGroupId {
+            return engine.timeline.tracks
+                .filter { $0.type == .audio }
+                .flatMap(\.clips)
+                .compactMap { $0 as? AudioClip }
+                .contains { $0.linkedClipGroupId == linkedClipGroupId }
+        }
+
+        return engine.timeline.tracks
+            .filter { $0.type == .audio }
+            .flatMap(\.clips)
+            .contains { clip in
+                guard let audioClip = clip as? AudioClip else {
+                    return false
+                }
+
+                return audioClip.sourceUrl == videoClip.sourceUrl &&
+                    abs(audioClip.timelineRange.start.seconds - videoClip.timelineRange.start.seconds) < 0.001 &&
+                    abs(audioClip.timelineRange.duration.seconds - videoClip.timelineRange.duration.seconds) < 0.001 &&
+                    abs(audioClip.sourceRange.start.seconds - videoClip.sourceRange.start.seconds) < 0.001 &&
+                    abs(audioClip.sourceRange.duration.seconds - videoClip.sourceRange.duration.seconds) < 0.001
+            }
+    }
+
+    private func linkedClipIDs(for clipId: UUID) -> [UUID] {
+        guard let (_, clip) = engine.timeline.clip(for: clipId) else {
+            return []
+        }
+
+        if let videoClip = clip as? VideoClip {
+            return matchingAudioClips(for: videoClip).map(\.id)
+        }
+
+        if let audioClip = clip as? AudioClip {
+            return matchingVideoClips(for: audioClip).map(\.id)
+        }
+
+        return []
+    }
+
+    private func matchingAudioClips(for videoClip: VideoClip) -> [AudioClip] {
+        if let linkedClipGroupId = videoClip.linkedClipGroupId {
+            return engine.timeline.tracks
+                .filter { $0.type == .audio }
+                .flatMap(\.clips)
+                .compactMap { $0 as? AudioClip }
+                .filter { $0.linkedClipGroupId == linkedClipGroupId }
+        }
+
+        return engine.timeline.tracks
+            .filter { $0.type == .audio }
+            .flatMap(\.clips)
+            .compactMap { $0 as? AudioClip }
+            .filter { audioClip in
+                audioClip.sourceUrl == videoClip.sourceUrl &&
+                    abs(audioClip.timelineRange.start.seconds - videoClip.timelineRange.start.seconds) < 0.001 &&
+                    abs(audioClip.timelineRange.duration.seconds - videoClip.timelineRange.duration.seconds) < 0.001 &&
+                    abs(audioClip.sourceRange.start.seconds - videoClip.sourceRange.start.seconds) < 0.001 &&
+                    abs(audioClip.sourceRange.duration.seconds - videoClip.sourceRange.duration.seconds) < 0.001
+            }
+    }
+
+    private func matchingVideoClips(for audioClip: AudioClip) -> [VideoClip] {
+        if let linkedClipGroupId = audioClip.linkedClipGroupId {
+            return engine.timeline.tracks
+                .filter { $0.type == .video }
+                .flatMap(\.clips)
+                .compactMap { $0 as? VideoClip }
+                .filter { $0.linkedClipGroupId == linkedClipGroupId }
+        }
+
+        return engine.timeline.tracks
+            .filter { $0.type == .video }
+            .flatMap(\.clips)
+            .compactMap { $0 as? VideoClip }
+            .filter { videoClip in
+                videoClip.sourceUrl == audioClip.sourceUrl &&
+                    abs(videoClip.timelineRange.start.seconds - audioClip.timelineRange.start.seconds) < 0.001 &&
+                    abs(videoClip.timelineRange.duration.seconds - audioClip.timelineRange.duration.seconds) < 0.001 &&
+                    abs(videoClip.sourceRange.start.seconds - audioClip.sourceRange.start.seconds) < 0.001 &&
+                    abs(videoClip.sourceRange.duration.seconds - audioClip.sourceRange.duration.seconds) < 0.001
+            }
     }
 }
 

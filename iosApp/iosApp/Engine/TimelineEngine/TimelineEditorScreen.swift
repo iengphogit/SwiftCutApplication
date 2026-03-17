@@ -13,7 +13,9 @@ struct TimelineEditorScreen: View {
     @StateObject private var viewModel = TimelineEditorViewModel()
     @State private var selectedClipId: UUID?
     @State private var showMediaPicker = false
+    @State private var showVideoImportOptions = false
     @State private var mediaPickerTarget: MediaPickerTarget = .video
+    @State private var importVideoWithAudio = true
     @State private var zoomScale: CGFloat = 1.0
     @State private var zoomAnchorRequest: TimelineZoomAnchorRequest?
     @State private var isRatioPanelVisible = false
@@ -61,20 +63,39 @@ struct TimelineEditorScreen: View {
                 viewModel.importMedia(
                     url: url,
                     kind: kind,
-                    destination: importDestination(for: mediaPickerTarget)
+                    destination: importDestination(for: mediaPickerTarget),
+                    extractAudioFromVideo: mediaPickerTarget == .video ? importVideoWithAudio : false
                 )
             }
         }
+        .confirmationDialog("Import Video", isPresented: $showVideoImportOptions) {
+            Button("Video + Audio") {
+                importVideoWithAudio = true
+                mediaPickerTarget = .video
+                showMediaPicker = true
+            }
+            Button("Video Only") {
+                importVideoWithAudio = false
+                mediaPickerTarget = .video
+                showMediaPicker = true
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Choose whether to extract embedded audio into a separate audio track.")
+        }
         .task(id: project.id) {
+            AppLogger.log("TimelineEditorScreen task loadProjectIfNeeded \(project.name)")
             viewModel.loadProjectIfNeeded(project)
         }
         .onChange(of: viewModel.isProjectLoading) { _, isLoading in
+            AppLogger.log("TimelineEditorScreen isProjectLoading=\(isLoading) for \(project.name)")
             if !isLoading {
                 onProjectReady()
             }
         }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        .accessibilityIdentifier("timeline-editor-screen")
     }
 
     private var topTitleSection: some View {
@@ -84,6 +105,7 @@ struct TimelineEditorScreen: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 8)
             .padding(.bottom, 10)
+            .accessibilityIdentifier("timeline-editor-title")
     }
     
     private var headerSection: some View {
@@ -250,6 +272,13 @@ struct TimelineEditorScreen: View {
             TimelineToolButton(icon: "crop", title: "Crop") {
                 
             }
+
+            TimelineToolButton(icon: "waveform.badge.plus", title: "Extract") {
+                if let clipId = selectedClipId {
+                    viewModel.extractAudio(from: clipId)
+                }
+            }
+            .disabled(!canExtractAudioFromSelectedClip)
             
             TimelineToolButton(icon: "trash", title: "Delete") {
                 if let clipId = selectedClipId {
@@ -458,6 +487,27 @@ struct TimelineEditorScreen: View {
                         selectedClipId: $selectedClipId,
                         onClipTap: { clipId in
                             selectedClipId = selectedClipId == clipId ? nil : clipId
+                        },
+                        onClipMove: { clipId, newStartSeconds in
+                            viewModel.moveClip(
+                                clipId,
+                                to: CMTime(seconds: newStartSeconds, preferredTimescale: 600)
+                            )
+                        },
+                        onClipTrimLeading: { clipId, timelineStartSeconds, sourceStartSeconds, sourceDurationSeconds in
+                            viewModel.trimClipLeadingEdge(
+                                clipId,
+                                timelineStartSeconds: timelineStartSeconds,
+                                sourceStartSeconds: sourceStartSeconds,
+                                sourceDurationSeconds: sourceDurationSeconds
+                            )
+                        },
+                        onClipTrimTrailing: { clipId, sourceStartSeconds, sourceDurationSeconds in
+                            viewModel.trimClipTrailingEdge(
+                                clipId,
+                                sourceStartSeconds: sourceStartSeconds,
+                                sourceDurationSeconds: sourceDurationSeconds
+                            )
                         }
                     )
                 }
@@ -470,8 +520,7 @@ struct TimelineEditorScreen: View {
     private var bottomToolsSection: some View {
         HStack(spacing: 0) {
             TimelineBottomToolButton(icon: "plus", title: "Add") {
-                mediaPickerTarget = .video
-                showMediaPicker = true
+                showVideoImportOptions = true
             }
             
             TimelineBottomToolButton(icon: "textformat", title: "Text") {
@@ -577,175 +626,19 @@ struct TimelineEditorScreen: View {
             return .overlay
         }
     }
+
+    private var canExtractAudioFromSelectedClip: Bool {
+        guard let selectedClipId else {
+            return false
+        }
+        return viewModel.canExtractAudio(from: selectedClipId)
+    }
 }
 
 private struct TimelineZoomAnchorRequest: Equatable {
     let id = UUID()
     let anchorTime: Double
     let locationX: CGFloat?
-}
-
-struct PreviewSeekCommand: Equatable {
-    let id = UUID()
-    let timeSeconds: Double
-}
-
-private struct NativeEnginePreviewHost: UIViewRepresentable {
-    let compositionFrame: CompositionFrame?
-    let durationSeconds: Double
-    let desiredIsPlaying: Bool
-    let seekCommand: PreviewSeekCommand?
-    let onDisplayTimeChange: (Double) -> Void
-    let onPlaybackStateChange: (Bool) -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeUIView(context: Context) -> SCNativePreviewView {
-        let view = SCNativePreviewView()
-        update(view, coordinator: context.coordinator)
-        return view
-    }
-
-    func updateUIView(_ uiView: SCNativePreviewView, context: Context) {
-        update(uiView, coordinator: context.coordinator)
-    }
-
-    private func update(_ view: SCNativePreviewView, coordinator: Coordinator) {
-        view.onDisplayTimeChange = onDisplayTimeChange
-        view.onPlaybackStateChange = onPlaybackStateChange
-        view.setPreviewDurationSeconds(durationSeconds)
-        if coordinator.lastAppliedPlaybackState != desiredIsPlaying {
-            view.setDesiredPlaybackState(desiredIsPlaying)
-            coordinator.lastAppliedPlaybackState = desiredIsPlaying
-        }
-        if coordinator.lastAppliedSeekCommandId != seekCommand?.id {
-            if let seekCommand {
-                view.seek(toTimeSeconds: seekCommand.timeSeconds)
-            }
-            coordinator.lastAppliedSeekCommandId = seekCommand?.id
-        }
-        view.updateCompositionVisualClipCount(
-            compositionFrame?.visualClips.count ?? 0,
-            audioClipCount: compositionFrame?.audioClips.count ?? 0,
-            activeVisualSummary: activeVisualSummary
-        )
-        view.updateActiveTextOverlays(activeTextOverlays)
-        view.updateActiveVisualOverlays(activeVisualOverlays)
-    }
-
-    private var activeVisualSummary: String {
-        guard let compositionFrame, let leadClip = compositionFrame.visualClips.first else {
-            return "No active layer"
-        }
-
-        switch leadClip.kind {
-        case .text:
-            let text = leadClip.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return text.isEmpty ? "Text layer active" : "Text: \(text)"
-        case .overlay:
-            return compositionFrame.visualClips.count > 1
-                ? "Overlay active +\(compositionFrame.visualClips.count - 1)"
-                : "Overlay active"
-        case .video:
-            return compositionFrame.visualClips.count > 1
-                ? "Video active +\(compositionFrame.visualClips.count - 1)"
-                : "Video active"
-        }
-    }
-
-    private var activeTextOverlays: [[AnyHashable: Any]] {
-        guard let compositionFrame else {
-            return []
-        }
-
-        return compositionFrame.visualClips.compactMap { clip in
-            guard clip.kind == .text, let text = clip.text, !text.isEmpty else {
-                return nil
-            }
-
-            let canvasWidth = max(compositionFrame.outputSize.width, 1)
-            let canvasHeight = max(compositionFrame.outputSize.height, 1)
-            let rawX = clip.transform.position.x == 0 ? canvasWidth / 2 : clip.transform.position.x
-            let rawY = clip.transform.position.y == 0 ? canvasHeight / 2 : clip.transform.position.y
-            let style = clip.textStyle ?? .default
-
-            return [
-                "text": text,
-                "normalizedX": min(max(rawX / canvasWidth, 0.05), 0.95),
-                "normalizedY": min(max(rawY / canvasHeight, 0.08), 0.92),
-                "fontName": style.fontName,
-                "fontSize": Double(style.fontSize),
-                "textColorHex": style.textColorHex,
-                "backgroundColorHex": style.backgroundColorHex ?? "",
-                "shadowColorHex": style.shadowColorHex ?? "",
-                "shadowOffsetX": Double(style.shadowOffset.width),
-                "shadowOffsetY": Double(style.shadowOffset.height),
-                "shadowBlur": Double(style.shadowBlur),
-                "alignment": style.alignment.rawValue
-            ]
-        }
-    }
-
-    private var activeVisualOverlays: [[AnyHashable: Any]] {
-        guard let compositionFrame else {
-            return []
-        }
-
-        return compositionFrame.visualClips.compactMap { clip in
-            guard clip.kind == .video || clip.kind == .overlay else {
-                return nil
-            }
-
-            let canvasWidth = max(compositionFrame.outputSize.width, 1)
-            let canvasHeight = max(compositionFrame.outputSize.height, 1)
-            let rawX = clip.transform.position.x == 0 ? canvasWidth / 2 : clip.transform.position.x
-            let rawY = clip.transform.position.y == 0 ? canvasHeight / 2 : clip.transform.position.y
-
-            return [
-                "kind": clip.kind.rawValue,
-                "clipId": clip.id.uuidString,
-                "normalizedX": min(max(rawX / canvasWidth, 0.05), 0.95),
-                "normalizedY": min(max(rawY / canvasHeight, 0.08), 0.92),
-                "scaleX": Double(max(clip.transform.scale.width, 0.2)),
-                "scaleY": Double(max(clip.transform.scale.height, 0.2)),
-                "rotationDegrees": clip.transform.rotationDegrees,
-                "opacity": clip.transform.opacity,
-                "sourcePath": clip.sourceURL?.path ?? "",
-                "sourceTimeSeconds": clip.sourceTimeSeconds,
-                "frameTimelineTimeSeconds": compositionFrame.timelineTimeSeconds,
-                "renderContent": clip.kind == .overlay || clip.kind == .video,
-                "cropX": normalizedCropRect(for: clip)?.origin.x ?? -1,
-                "cropY": normalizedCropRect(for: clip)?.origin.y ?? -1,
-                "cropWidth": normalizedCropRect(for: clip)?.size.width ?? -1,
-                "cropHeight": normalizedCropRect(for: clip)?.size.height ?? -1
-            ]
-        }
-    }
-
-    private func normalizedCropRect(for clip: VisualClipSnapshot) -> CGRect? {
-        guard let cropRect = clip.transform.cropRect else {
-            return nil
-        }
-
-        let isNormalized =
-            cropRect.origin.x >= 0 && cropRect.origin.x <= 1 &&
-            cropRect.origin.y >= 0 && cropRect.origin.y <= 1 &&
-            cropRect.size.width > 0 && cropRect.size.width <= 1 &&
-            cropRect.size.height > 0 && cropRect.size.height <= 1
-
-        guard isNormalized else {
-            return nil
-        }
-
-        return cropRect
-    }
-
-    final class Coordinator {
-        var lastAppliedPlaybackState: Bool?
-        var lastAppliedSeekCommandId: UUID?
-    }
 }
 
 private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable {

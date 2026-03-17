@@ -24,6 +24,8 @@ struct NativeClipSnapshot: Identifiable {
     let id: UUID
     let name: String
     let type: String
+    let sourceStart: Double
+    let sourceDuration: Double
     let timelineStart: Double
     let timelineDuration: Double
     let sourcePath: String
@@ -239,6 +241,8 @@ private extension NativeClipSnapshot {
             let id = UUID(uuidString: idString),
             let name = dictionary["name"] as? String,
             let type = dictionary["type"] as? String,
+            let sourceStart = dictionary["sourceStart"] as? Double,
+            let sourceDuration = dictionary["sourceDuration"] as? Double,
             let timelineStart = dictionary["timelineStart"] as? Double,
             let timelineDuration = dictionary["timelineDuration"] as? Double
         else {
@@ -248,6 +252,8 @@ private extension NativeClipSnapshot {
         self.id = id
         self.name = name
         self.type = type
+        self.sourceStart = sourceStart
+        self.sourceDuration = sourceDuration
         self.timelineStart = timelineStart
         self.timelineDuration = timelineDuration
         self.sourcePath = dictionary["sourcePath"] as? String ?? ""

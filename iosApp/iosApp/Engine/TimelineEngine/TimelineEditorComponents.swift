@@ -248,6 +248,9 @@ struct TrackLaneView: View {
     let zoomScale: CGFloat
     @Binding var selectedClipId: UUID?
     let onClipTap: (UUID) -> Void
+    let onClipMove: (UUID, Double) -> Void
+    let onClipTrimLeading: (UUID, Double, Double, Double) -> Void
+    let onClipTrimTrailing: (UUID, Double, Double) -> Void
     
     var body: some View {
         ZStack(alignment: .leading) {
@@ -259,16 +262,36 @@ struct TrackLaneView: View {
                 )
 
             ForEach(track.clips) { clip in
-                ClipView(
+                TimelineClipItemView(
                     clip: clip,
                     zoomScale: zoomScale,
                     isSelected: selectedClipId == clip.id,
-                    expandsVideoAudio: track.type == .video
+                    expandsVideoAudio: track.type == .video,
+                    baseOffset: leadingTimelineInset + clip.startOffset(zoomScale: zoomScale),
+                    pointsPerSecond: 60 * zoomScale,
+                    canMove: !track.isLocked,
+                    onTap: {
+                        onClipTap(clip.id)
+                    },
+                    onMoveCommit: { newStartSeconds in
+                        onClipMove(clip.id, newStartSeconds)
+                    },
+                    onLeadingTrimCommit: { timelineStartSeconds, sourceStartSeconds, sourceDurationSeconds in
+                        onClipTrimLeading(
+                            clip.id,
+                            timelineStartSeconds,
+                            sourceStartSeconds,
+                            sourceDurationSeconds
+                        )
+                    },
+                    onTrailingTrimCommit: { sourceStartSeconds, sourceDurationSeconds in
+                        onClipTrimTrailing(
+                            clip.id,
+                            sourceStartSeconds,
+                            sourceDurationSeconds
+                        )
+                    }
                 )
-                .offset(x: leadingTimelineInset + clip.startOffset(zoomScale: zoomScale))
-                .onTapGesture {
-                    onClipTap(clip.id)
-                }
             }
         }
         .padding(.leading, rightLanePadding)
@@ -290,6 +313,175 @@ struct TrackLaneView: View {
 
     private var laneBodyHeight: CGFloat {
         track.type == .video ? 66 : 44
+    }
+}
+
+private struct TimelineClipItemView: View {
+    let clip: ClipDisplayModel
+    let zoomScale: CGFloat
+    let isSelected: Bool
+    let expandsVideoAudio: Bool
+    let baseOffset: CGFloat
+    let pointsPerSecond: CGFloat
+    let canMove: Bool
+    let onTap: () -> Void
+    let onMoveCommit: (Double) -> Void
+    let onLeadingTrimCommit: (Double, Double, Double) -> Void
+    let onTrailingTrimCommit: (Double, Double) -> Void
+
+    @GestureState private var dragTranslationX: CGFloat = 0
+    @GestureState private var leadingTrimTranslationX: CGFloat = 0
+    @GestureState private var trailingTrimTranslationX: CGFloat = 0
+    @State private var isMoveGestureActive = false
+    @State private var isLeadingTrimActive = false
+    @State private var isTrailingTrimActive = false
+
+    var body: some View {
+        ZStack {
+            ClipView(
+                clip: clip,
+                zoomScale: zoomScale,
+                isSelected: isSelected || isMoveGestureActive || isLeadingTrimActive || isTrailingTrimActive,
+                expandsVideoAudio: expandsVideoAudio
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !isMoveGestureActive, !isLeadingTrimActive, !isTrailingTrimActive else { return }
+                onTap()
+            }
+            .simultaneousGesture(canMove ? moveGesture : nil)
+
+            if canMove {
+                HStack(spacing: 0) {
+                    trimHandle
+                        .gesture(leadingTrimGesture)
+                    Spacer(minLength: 0)
+                    trimHandle
+                        .gesture(trailingTrimGesture)
+                }
+            }
+        }
+        .frame(width: clipWidth, height: nil, alignment: .center)
+        .offset(
+            x: baseOffset + activeDragOffset + leadingTrimVisualOffset,
+            y: 0
+        )
+    }
+
+    private var activeDragOffset: CGFloat {
+        max(-baseOffset, dragTranslationX)
+    }
+
+    private var clipWidth: CGFloat {
+        clip.width(zoomScale: zoomScale)
+    }
+
+    private var leadingTrimVisualOffset: CGFloat {
+        if isTrailingTrimActive {
+            return 0
+        }
+        return clampedLeadingTrimTranslation
+    }
+
+    private var clampedLeadingTrimTranslation: CGFloat {
+        min(
+            max(leadingTrimTranslationX, -baseOffset),
+            max(clipWidth - minimumClipWidth, 0)
+        )
+    }
+
+    private var clampedTrailingTrimTranslation: CGFloat {
+        max(trailingTrimTranslationX, -(clipWidth - minimumClipWidth))
+    }
+
+    private var minimumClipWidth: CGFloat {
+        max(pointsPerSecond * minimumTimelineDurationSeconds, 28)
+    }
+
+    private var minimumTimelineDurationSeconds: Double {
+        0.25
+    }
+
+    private var sourceSecondsPerTimelineSecond: Double {
+        guard clip.durationSeconds > 0.0001 else { return 1 }
+        return clip.sourceDurationSeconds / clip.durationSeconds
+    }
+
+    private var trimHandle: some View {
+        Capsule()
+            .fill(Color.white.opacity(0.88))
+            .frame(width: 8, height: 26)
+            .padding(.horizontal, 2)
+    }
+
+    private var moveGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.15)
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .updating($dragTranslationX) { value, state, _ in
+                if case .second(true, let drag?) = value {
+                    state = drag.translation.width
+                }
+            }
+            .onChanged { value in
+                if case .second(true, _) = value {
+                    isMoveGestureActive = true
+                }
+            }
+            .onEnded { value in
+                defer { isMoveGestureActive = false }
+                guard case .second(true, let drag?) = value else { return }
+                let deltaSeconds = Double(activeDragOffset / max(pointsPerSecond, 1))
+                let newStartSeconds = max(0, clip.startSeconds + deltaSeconds)
+                onMoveCommit(newStartSeconds)
+            }
+    }
+
+    private var leadingTrimGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .updating($leadingTrimTranslationX) { value, state, _ in
+                state = value.translation.width
+            }
+            .onChanged { _ in
+                isLeadingTrimActive = true
+            }
+            .onEnded { _ in
+                defer { isLeadingTrimActive = false }
+                let deltaTimelineSeconds = Double(clampedLeadingTrimTranslation / max(pointsPerSecond, 1))
+                guard abs(deltaTimelineSeconds) > 0.0001 else { return }
+
+                let newTimelineStart = max(0, clip.startSeconds + deltaTimelineSeconds)
+                let deltaSourceSeconds = deltaTimelineSeconds * sourceSecondsPerTimelineSecond
+                let newSourceStart = max(0, clip.sourceStartSeconds + deltaSourceSeconds)
+                let newSourceDuration = max(
+                    minimumTimelineDurationSeconds * sourceSecondsPerTimelineSecond,
+                    clip.sourceDurationSeconds - deltaSourceSeconds
+                )
+
+                onLeadingTrimCommit(newTimelineStart, newSourceStart, newSourceDuration)
+            }
+    }
+
+    private var trailingTrimGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .updating($trailingTrimTranslationX) { value, state, _ in
+                state = value.translation.width
+            }
+            .onChanged { _ in
+                isTrailingTrimActive = true
+            }
+            .onEnded { _ in
+                defer { isTrailingTrimActive = false }
+                let deltaTimelineSeconds = Double(clampedTrailingTrimTranslation / max(pointsPerSecond, 1))
+                guard abs(deltaTimelineSeconds) > 0.0001 else { return }
+
+                let deltaSourceSeconds = deltaTimelineSeconds * sourceSecondsPerTimelineSecond
+                let newSourceDuration = max(
+                    minimumTimelineDurationSeconds * sourceSecondsPerTimelineSecond,
+                    clip.sourceDurationSeconds + deltaSourceSeconds
+                )
+
+                onTrailingTrimCommit(clip.sourceStartSeconds, newSourceDuration)
+            }
     }
 }
 

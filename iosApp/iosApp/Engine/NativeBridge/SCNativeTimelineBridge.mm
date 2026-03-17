@@ -137,6 +137,8 @@
                 @"id": [NSString stringWithUTF8String:clip.id.c_str()],
                 @"name": [NSString stringWithUTF8String:clip.name.c_str()],
                 @"type": [self stringFromTrackType:clip.type],
+                @"sourceStart": @(clip.sourceRange.startSeconds),
+                @"sourceDuration": @(clip.sourceRange.durationSeconds),
                 @"timelineStart": @(clip.timelineRange.startSeconds),
                 @"timelineDuration": @(clip.timelineRange.durationSeconds),
                 @"sourcePath": clip.sourcePath.empty()
