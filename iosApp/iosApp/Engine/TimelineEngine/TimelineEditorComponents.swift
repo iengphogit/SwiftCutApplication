@@ -416,6 +416,8 @@ private struct ClipView: View {
     let zoomScale: CGFloat
     let isSelected: Bool
     let expandsVideoAudio: Bool
+
+    @State private var showsEmbeddedAudio = false
     
     var body: some View {
         ZStack(alignment: .leading) {
@@ -442,6 +444,13 @@ private struct ClipView: View {
             Rectangle()
                 .stroke(isSelected ? Color.white : Color.clear, lineWidth: 2)
         )
+        .task(id: "\(clip.type)-\(clip.sourcePath)") {
+            guard clip.type == .video, expandsVideoAudio else {
+                showsEmbeddedAudio = false
+                return
+            }
+            showsEmbeddedAudio = await TimelineClipVisualCache.hasAudioTrack(for: clip.sourcePath)
+        }
     }
 
     @ViewBuilder
@@ -451,7 +460,7 @@ private struct ClipView: View {
             AudioWaveformStrip(sourcePath: clip.sourcePath)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 7)
-        case .video where expandsVideoAudio:
+        case .video where expandsVideoAudio && showsEmbeddedAudio:
             VStack(spacing: 1) {
                 TimelineClipThumbnailStrip(
                     sourcePath: clip.sourcePath,
@@ -534,11 +543,11 @@ private struct ClipView: View {
     }
 
     private var clipHeight: CGFloat {
-        clip.type == .video && expandsVideoAudio ? 56 : 36
+        clip.type == .video && expandsVideoAudio && showsEmbeddedAudio ? 56 : 36
     }
 
     private var overlayTopPadding: CGFloat {
-        clip.type == .video && expandsVideoAudio ? 2 : 0
+        clip.type == .video && expandsVideoAudio && showsEmbeddedAudio ? 2 : 0
     }
 }
 
@@ -576,12 +585,27 @@ struct TimelineClipThumbnailStrip: View {
             }
             .clipped()
             .task(id: "\(sourcePath)-\(thumbnailCount)-\(durationSeconds)") {
-                images = await TimelineClipVisualCache.thumbnailStrip(
-                    for: sourcePath,
-                    durationSeconds: durationSeconds,
-                    frameCount: thumbnailCount
-                )
+                await loadImages(thumbnailCount: thumbnailCount)
             }
+        }
+    }
+
+    @MainActor
+    private func loadImages(thumbnailCount: Int) async {
+        if let posterFrame = await TimelineClipVisualCache.thumbnail(for: sourcePath) {
+            images = [posterFrame]
+        } else {
+            images = []
+        }
+
+        let strip = await TimelineClipVisualCache.thumbnailStrip(
+            for: sourcePath,
+            durationSeconds: durationSeconds,
+            frameCount: thumbnailCount
+        )
+
+        if !strip.isEmpty {
+            images = strip
         }
     }
 }
@@ -619,6 +643,7 @@ private enum TimelineClipVisualCache {
     private static let thumbnailCache = NSCache<NSString, UIImage>()
     private static let thumbnailStripCache = NSCache<NSString, NSArray>()
     private static let waveformCache = NSCache<NSString, NSArray>()
+    private static let audioPresenceCache = NSCache<NSString, NSNumber>()
 
     static func thumbnail(for sourcePath: String) async -> UIImage? {
         guard !sourcePath.isEmpty else { return nil }
@@ -704,6 +729,21 @@ private enum TimelineClipVisualCache {
             let values = generateWaveformSamples(sourcePath: sourcePath)
             waveformCache.setObject(values.map(NSNumber.init(value:)) as NSArray, forKey: sourcePath as NSString)
             return values.map { CGFloat($0) }
+        }.value
+    }
+
+    static func hasAudioTrack(for sourcePath: String) async -> Bool {
+        guard !sourcePath.isEmpty else { return false }
+
+        if let cached = audioPresenceCache.object(forKey: sourcePath as NSString) {
+            return cached.boolValue
+        }
+
+        return await Task<Bool, Never>.detached(priority: .utility) {
+            let asset = AVURLAsset(url: URL(fileURLWithPath: sourcePath))
+            let hasAudio = !asset.tracks(withMediaType: .audio).isEmpty
+            audioPresenceCache.setObject(NSNumber(value: hasAudio), forKey: sourcePath as NSString)
+            return hasAudio
         }.value
     }
 
