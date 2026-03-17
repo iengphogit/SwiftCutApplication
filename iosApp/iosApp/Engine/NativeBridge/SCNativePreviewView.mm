@@ -14,6 +14,11 @@
 @property (nonatomic, strong) NSMutableArray<UILabel *> *textOverlayLabels;
 @property (nonatomic, strong) NSMutableArray<CALayer *> *visualGuideLayers;
 @property (nonatomic, strong) CALayer *baseVideoLayer;
+@property (nonatomic, strong) AVAudioEngine *audioEngine;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, AVAudioPlayerNode *> *audioNodes;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, AVAudioFile *> *audioFiles;
+@property (nonatomic, copy) NSArray<NSDictionary *> *activeAudioClips;
+@property (nonatomic, copy) NSString *activeAudioSignature;
 @property (nonatomic, strong, nullable) CADisplayLink *displayLink;
 @property (nonatomic, assign) double previewDurationSeconds;
 @property (nonatomic, assign) double currentTimeSeconds;
@@ -74,6 +79,10 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
         _activeLabel.text = @"No active layer";
         _textOverlayLabels = [NSMutableArray array];
         _visualGuideLayers = [NSMutableArray array];
+        _audioNodes = [NSMutableDictionary dictionary];
+        _audioFiles = [NSMutableDictionary dictionary];
+        _activeAudioClips = @[];
+        _activeAudioSignature = @"";
         _thumbnailQueue = dispatch_queue_create("space.iengpho.swiftcut.preview.thumbnail", DISPATCH_QUEUE_SERIAL);
         _baseVideoLayer = [CALayer layer];
         _baseVideoLayer.contentsGravity = kCAGravityResizeAspect;
@@ -113,6 +122,8 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
 }
 
 - (void)dealloc {
+    [self stopAndResetAudioNodes];
+    [_audioEngine stop];
     [_displayLink invalidate];
 }
 
@@ -122,25 +133,43 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
 }
 
 - (void)setDesiredPlaybackState:(BOOL)playing {
+    if (self.desiredPlaying == playing) {
+        return;
+    }
+
     self.desiredPlaying = playing;
     if (!playing) {
         self.lastDisplayLinkTimestamp = 0.0;
+        [self pauseAudioNodes];
+    } else if (self.activeAudioClips.count > 0) {
+        [self synchronizeAudioTransport];
     }
 }
 
 - (void)seekToTimeSeconds:(double)seconds {
     self.currentTimeSeconds = [self clampedTimeSeconds:seconds];
     self.lastDisplayLinkTimestamp = 0.0;
+    [self synchronizeAudioTransport];
     [self updateBaseVideoFrameForDisplayTimeSeconds:self.currentTimeSeconds];
     [self updateOverlayContentLayersForDisplayTimeSeconds:self.currentTimeSeconds generation:_visualGeneration];
     if (self.onDisplayTimeChange != nil) {
-        self.onDisplayTimeChange(self.currentTimeSeconds);
+        double currentTimeSeconds = self.currentTimeSeconds;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (self.onDisplayTimeChange != nil) {
+                self.onDisplayTimeChange(currentTimeSeconds);
+            }
+        });
     }
     [self refreshOverlayLabels];
 }
 
 - (void)setPreviewDurationSeconds:(double)seconds {
-    self.previewDurationSeconds = MAX(seconds, 0.0);
+    const double clampedDurationSeconds = MAX(seconds, 0.0);
+    if (_previewDurationSeconds == clampedDurationSeconds) {
+        return;
+    }
+
+    _previewDurationSeconds = clampedDurationSeconds;
     self.currentTimeSeconds = [self clampedTimeSeconds:self.currentTimeSeconds];
 }
 
@@ -378,6 +407,18 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
     self.baseVideoLayer.hidden = !rendersPrimaryVideo;
 }
 
+- (void)updateActiveAudioClips:(NSArray<NSDictionary *> * _Nullable)clips {
+    NSArray<NSDictionary *> *payloads = clips ?: @[];
+    NSString *signature = [self.class audioSignatureForPayloads:payloads];
+    BOOL didChange = ![signature isEqualToString:self.activeAudioSignature];
+    self.activeAudioClips = payloads;
+    self.activeAudioSignature = signature;
+
+    if (didChange || payloads.count == 0) {
+        [self synchronizeAudioTransport];
+    }
+}
+
 - (void)didMoveToWindow {
     [super didMoveToWindow];
     if (self.window == nil) {
@@ -413,6 +454,7 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
             if (self.previewDurationSeconds > 0.0 && self.currentTimeSeconds >= self.previewDurationSeconds) {
                 self.currentTimeSeconds = self.previewDurationSeconds;
                 self.desiredPlaying = NO;
+                [self pauseAudioNodes];
             }
         }
         self.lastDisplayLinkTimestamp = timestamp;
@@ -425,10 +467,20 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
     [self updateBaseVideoFrameForDisplayTimeSeconds:self.currentTimeSeconds];
     [self updateOverlayContentLayersForDisplayTimeSeconds:self.currentTimeSeconds generation:_visualGeneration];
     if (self.onDisplayTimeChange != nil) {
-        self.onDisplayTimeChange(self.currentTimeSeconds);
+        double currentTimeSeconds = self.currentTimeSeconds;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (self.onDisplayTimeChange != nil) {
+                self.onDisplayTimeChange(currentTimeSeconds);
+            }
+        });
     }
     if (self.onPlaybackStateChange != nil) {
-        self.onPlaybackStateChange(self.desiredPlaying);
+        BOOL desiredPlaying = self.desiredPlaying;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (self.onPlaybackStateChange != nil) {
+                self.onPlaybackStateChange(desiredPlaying);
+            }
+        });
     }
 
     [self refreshOverlayLabels];
@@ -447,6 +499,9 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
 
 
 + (NSString *)formattedTime:(double)seconds {
+    if (!isfinite(seconds) || seconds < 0.0) {
+        seconds = 0.0;
+    }
     NSInteger totalSeconds = (NSInteger)seconds;
     NSInteger minutes = totalSeconds / 60;
     NSInteger remainder = totalSeconds % 60;
@@ -498,6 +553,9 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
     }
 
     const double timelineDelta = displayTimeSeconds - frameTimelineTime.doubleValue;
+    if (!isfinite(timelineDelta) || !isfinite(baseSourceTime.doubleValue)) {
+        return;
+    }
     const double sourceTimeSeconds = MAX(0.0, baseSourceTime.doubleValue + timelineDelta);
     [self loadThumbnailForSourcePath:sourcePath
                    sourceTimeSeconds:sourceTimeSeconds
@@ -526,6 +584,9 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
             }
 
             const double timelineDelta = displayTimeSeconds - frameTimelineTime.doubleValue;
+            if (!isfinite(timelineDelta) || !isfinite(baseSourceTime.doubleValue)) {
+                continue;
+            }
             const double sourceTimeSeconds = MAX(0.0, baseSourceTime.doubleValue + timelineDelta);
             [self loadThumbnailForSourcePath:sourcePath
                            sourceTimeSeconds:sourceTimeSeconds
@@ -536,11 +597,124 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
 }
 
 - (double)clampedTimeSeconds:(double)seconds {
+    if (!isfinite(seconds)) {
+        return 0.0;
+    }
+
     const double lowerBound = MAX(seconds, 0.0);
     if (self.previewDurationSeconds <= 0.0) {
         return lowerBound;
     }
     return MIN(lowerBound, self.previewDurationSeconds);
+}
+
+- (void)synchronizeAudioTransport {
+    [self stopAndResetAudioNodes];
+
+    if (self.activeAudioClips.count == 0) {
+        return;
+    }
+
+    [self ensureAudioEngineStarted];
+
+    for (NSDictionary *clip in self.activeAudioClips) {
+        NSString *clipId = clip[@"clipId"];
+        NSString *sourcePath = clip[@"sourcePath"];
+        NSNumber *sourceTimeSeconds = clip[@"sourceTimeSeconds"];
+        NSNumber *remainingDurationSeconds = clip[@"remainingDurationSeconds"];
+        NSNumber *volume = clip[@"volume"];
+        NSNumber *muted = clip[@"muted"];
+
+        if (
+            clipId.length == 0 ||
+            sourcePath.length == 0 ||
+            sourceTimeSeconds == nil ||
+            remainingDurationSeconds == nil
+        ) {
+            continue;
+        }
+
+        NSError *error = nil;
+        AVAudioFile *audioFile = [[AVAudioFile alloc] initForReading:[NSURL fileURLWithPath:sourcePath] error:&error];
+        if (audioFile == nil || error != nil) {
+            continue;
+        }
+
+        const AVAudioFramePosition startingFrame = MAX(
+            0,
+            (AVAudioFramePosition)llround(sourceTimeSeconds.doubleValue * audioFile.processingFormat.sampleRate)
+        );
+        const AVAudioFramePosition availableFrames = MAX(0, audioFile.length - startingFrame);
+        const AVAudioFramePosition requestedFrames = MAX(
+            0,
+            (AVAudioFramePosition)llround(remainingDurationSeconds.doubleValue * audioFile.processingFormat.sampleRate)
+        );
+        const AVAudioFrameCount frameCount = (AVAudioFrameCount)MIN(availableFrames, requestedFrames);
+        if (frameCount == 0) {
+            continue;
+        }
+
+        AVAudioPlayerNode *playerNode = [[AVAudioPlayerNode alloc] init];
+        playerNode.volume = muted.boolValue ? 0.0f : (volume != nil ? volume.floatValue : 1.0f);
+        [self.audioEngine attachNode:playerNode];
+        [self.audioEngine connect:playerNode to:self.audioEngine.mainMixerNode format:audioFile.processingFormat];
+        [playerNode scheduleSegment:audioFile
+                      startingFrame:startingFrame
+                         frameCount:frameCount
+                             atTime:nil
+                  completionHandler:nil];
+        self.audioNodes[clipId] = playerNode;
+        self.audioFiles[clipId] = audioFile;
+    }
+
+    if (self.desiredPlaying) {
+        [self playAudioNodes];
+    }
+}
+
+- (void)ensureAudioEngineStarted {
+    if (self.audioEngine == nil) {
+        self.audioEngine = [[AVAudioEngine alloc] init];
+    }
+
+    if (self.audioEngine.isRunning) {
+        return;
+    }
+
+    NSError *error = nil;
+    [self.audioEngine startAndReturnError:&error];
+}
+
+- (void)stopAndResetAudioNodes {
+    if (self.audioEngine == nil) {
+        [self.audioNodes removeAllObjects];
+        return;
+    }
+
+    for (AVAudioPlayerNode *node in self.audioNodes.objectEnumerator) {
+        [node stop];
+        [self.audioEngine detachNode:node];
+    }
+    [self.audioNodes removeAllObjects];
+    [self.audioFiles removeAllObjects];
+    [self.audioEngine reset];
+}
+
+- (void)pauseAudioNodes {
+    for (AVAudioPlayerNode *node in self.audioNodes.objectEnumerator) {
+        if (node.isPlaying) {
+            [node pause];
+        }
+    }
+}
+
+- (void)playAudioNodes {
+    [self ensureAudioEngineStarted];
+    for (AVAudioPlayerNode *node in self.audioNodes.objectEnumerator) {
+        if (!node.isPlaying) {
+            [node play];
+        }
+    }
 }
 
 - (void)loadThumbnailForSourcePath:(NSString *)sourcePath
@@ -697,6 +871,22 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
 
 + (double)previewFrameStep {
     return 1.0 / 24.0;
+}
+
++ (NSString *)audioSignatureForPayloads:(NSArray<NSDictionary *> *)payloads {
+    if (payloads.count == 0) {
+        return @"";
+    }
+
+    NSMutableArray<NSString *> *components = [NSMutableArray arrayWithCapacity:payloads.count];
+    for (NSDictionary *clip in payloads) {
+        NSString *clipId = clip[@"clipId"] ?: @"";
+        NSString *sourcePath = clip[@"sourcePath"] ?: @"";
+        NSNumber *volume = clip[@"volume"] ?: @1.0;
+        NSNumber *muted = clip[@"muted"] ?: @NO;
+        [components addObject:[NSString stringWithFormat:@"%@|%@|%.3f|%@", clipId, sourcePath, volume.doubleValue, muted.boolValue ? @"1" : @"0"]];
+    }
+    return [components componentsJoinedByString:@","];
 }
 
 @end
