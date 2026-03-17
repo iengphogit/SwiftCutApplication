@@ -217,6 +217,27 @@ The app-facing facade should expose actions such as:
 This keeps UI code out of engine internals and makes the native engine
 replaceable without rewriting the interface layer.
 
+## Responsiveness Rules
+
+These rules apply across the iOS app:
+
+- do not block the UI thread for project loading, media probing, thumbnail generation, waveform generation, or timeline rebuild preparation
+- run file I/O, asset probing, thumbnail generation, and waveform generation in background work
+- only publish final UI state changes on the main thread
+- when opening a project, show a loading state immediately instead of leaving the UI visually stuck
+- when background work finishes, sync the minimum required state back to the UI
+
+These are not optional style choices. They are baseline behavior requirements
+for this project.
+
+## Size Rule
+
+Keep files and types maintainable:
+
+- avoid more than `1000` lines in one view, class, or coordinator file
+- split large UI surfaces into focused files for screen layout, controls, and media visualization
+- if a screen starts collecting unrelated helper structs, move them out before continuing feature work
+
 ## Recommended Module Layout
 
 Suggested local grouping:

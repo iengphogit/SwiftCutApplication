@@ -197,6 +197,18 @@ If timeline behavior is changed later, verify these cases manually:
 6. zoom in and confirm ruler labels/ticks become denser
 7. confirm the left channel stays fixed while only the right lane scrolls
 
+## Project-Wide Implementation Rules
+
+These rules should be enforced in future work:
+
+- all project and media I/O must run in background work
+- all expensive asset inspection must stay off the main thread
+- all thumbnail and waveform generation must stay off the main thread
+- sync only the final display state back to the UI on the main thread
+- show loading state immediately for project-open and media-open flows
+- do not leave the user on a visually frozen screen while work is happening
+- keep files under `1000` lines when practical; split oversized screens and helpers into separate files before adding more features
+
 ## Phase 6: Audio Engine
 
 Goal:

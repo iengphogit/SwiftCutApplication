@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var isMediaLibraryPresented = false
     @State private var pendingProjectId: UUID?
     @State private var isLoadingMediaLibrary = false
+    @State private var isOpeningProject = false
     @State private var isShowingSplash = true
 
     var body: some View {
@@ -22,7 +23,7 @@ struct ContentView: View {
                             projects: workspaceStore.projects,
                             onCreateNewProject: handleCreateNewProject,
                             onOpenProject: { project in
-                                navigationPath.append(Route.studio(projectId: project.id))
+                                handleOpenProject(project)
                             },
                             onExit: handleExitApp,
                             onDeleteProject: handleDeleteProject
@@ -32,6 +33,7 @@ struct ContentView: View {
                             TimelineEditorScreen(
                                 project: project,
                                 onBack: { navigationPath.removeLast() },
+                                onProjectReady: { isOpeningProject = false },
                                 onUpdateAspectRatio: { ratio in
                                     workspaceStore.updateAspectRatio(
                                         for: project.id,
@@ -54,6 +56,11 @@ struct ContentView: View {
         .overlay {
             if isLoadingMediaLibrary {
                 LoadingOverlay()
+            }
+        }
+        .overlay {
+            if isOpeningProject {
+                OpeningProjectOverlay()
             }
         }
         .overlay {
@@ -113,6 +120,7 @@ struct ContentView: View {
         if let project = workspaceStore.createProject(from: payload) {
             pendingProjectId = project.id
             isMediaLibraryPresented = false
+            isOpeningProject = true
         }
     }
 
@@ -123,6 +131,13 @@ struct ContentView: View {
         }
         pendingProjectId = nil
         navigationPath.append(Route.studio(projectId: projectId))
+    }
+
+    private func handleOpenProject(_ project: WorkspaceProject) {
+        isOpeningProject = true
+        DispatchQueue.main.async {
+            navigationPath.append(Route.studio(projectId: project.id))
+        }
     }
 
     private func handleDeleteProject(_ project: WorkspaceProject) {
@@ -153,6 +168,27 @@ private struct LoadingOverlay: View {
             }
             .padding(20)
             .background(Color.black.opacity(0.7))
+            .cornerRadius(16)
+        }
+    }
+}
+
+private struct OpeningProjectOverlay: View {
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.22)
+                .ignoresSafeArea()
+
+            VStack(spacing: 12) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                Text("Opening Project…")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+            }
+            .padding(20)
+            .background(Color.black.opacity(0.72))
             .cornerRadius(16)
         }
     }

@@ -280,7 +280,7 @@ private struct StepSelectorRow<Option: Hashable>: View {
     }
 }
 
-private extension AspectRatio {
+extension AspectRatio {
     var ratioValue: CGFloat {
         switch self {
         case .ratio16x9:
@@ -460,20 +460,16 @@ private struct StudioVideoPreview: UIViewRepresentable {
 }
 
 private final class StudioVideoPreviewView: UIView {
-    private let player = AVPlayer()
+    private let imageView = UIImageView()
     private var configuredURL: URL?
-
-    override static var layerClass: AnyClass {
-        AVPlayerLayer.self
-    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .black
-        playerLayer.videoGravity = .resizeAspect
-        player.isMuted = true
-        player.actionAtItemEnd = .pause
-        playerLayer.player = player
+        imageView.contentMode = .scaleAspectFit
+        imageView.frame = bounds
+        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(imageView)
     }
 
     required init?(coder: NSCoder) {
@@ -483,12 +479,16 @@ private final class StudioVideoPreviewView: UIView {
     func configure(url: URL) {
         guard configuredURL != url else { return }
         configuredURL = url
-        player.replaceCurrentItem(with: AVPlayerItem(url: url))
-        player.seek(to: .zero)
-    }
-
-    private var playerLayer: AVPlayerLayer {
-        layer as! AVPlayerLayer
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 1280, height: 1280)
+        generator.generateCGImageAsynchronously(for: .zero) { [weak self] cgImage, _, _ in
+            guard let self, let cgImage else { return }
+            DispatchQueue.main.async {
+                self.imageView.image = UIImage(cgImage: cgImage)
+            }
+        }
     }
 }
 

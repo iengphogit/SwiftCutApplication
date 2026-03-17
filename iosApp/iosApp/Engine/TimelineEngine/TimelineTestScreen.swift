@@ -13,8 +13,10 @@ struct TimelineTestScreen: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                if let player = viewModel.previewPlayer, showPreview {
-                    InlinePreviewPlayer(player: player)
+                if let previewImage = viewModel.previewImage, showPreview {
+                    Image(uiImage: previewImage)
+                        .resizable()
+                        .scaledToFit()
                         .frame(maxWidth: .infinity)
                         .aspectRatio(16.0 / 9.0, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -71,7 +73,7 @@ struct TimelineTestScreen: View {
         HStack(spacing: 12) {
             Button(action: {
                 viewModel.playPreview()
-                showPreview = viewModel.previewPlayer != nil
+                showPreview = viewModel.previewImage != nil
             }) {
                 Label(showPreview ? "Replay" : "Preview", systemImage: "play.fill")
                     .frame(maxWidth: .infinity)
@@ -199,7 +201,7 @@ class TimelineTestViewModel: ObservableObject {
     @Published var duration: CMTime = .zero
     @Published var totalClips: Int = 0
     @Published var trackInfos: [TrackInfo] = []
-    @Published private(set) var previewPlayer: AVPlayer?
+    @Published private(set) var previewImage: UIImage?
     
     private var engine = TimelineEngine()
     
@@ -243,14 +245,26 @@ class TimelineTestViewModel: ObservableObject {
     }
     
     func playPreview() {
-        do {
-            let composition = try engine.buildComposition()
-            let playerItem = AVPlayerItem(asset: composition)
-            
-            previewPlayer = AVPlayer(playerItem: playerItem)
-            previewPlayer?.play()
-        } catch {
-            print("Preview error: \(error)")
+        guard
+            let firstVideoClip = engine.timeline.tracks
+                .first(where: { $0.type == .video })?
+                .clips
+                .compactMap({ $0 as? VideoClip })
+                .first
+        else {
+            previewImage = nil
+            return
+        }
+
+        let asset = AVURLAsset(url: firstVideoClip.sourceUrl)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 1280, height: 1280)
+        generator.generateCGImageAsynchronously(for: firstVideoClip.sourceRange.start) { [weak self] cgImage, _, _ in
+            guard let self, let cgImage else { return }
+            Task { @MainActor in
+                self.previewImage = UIImage(cgImage: cgImage)
+            }
         }
     }
     
@@ -280,46 +294,6 @@ class TimelineTestViewModel: ObservableObject {
                 isLocked: track.isLocked
             )
         }
-    }
-}
-
-private struct InlinePreviewPlayer: UIViewRepresentable {
-    let player: AVPlayer
-
-    func makeUIView(context: Context) -> InlinePreviewPlayerView {
-        let view = InlinePreviewPlayerView()
-        view.player = player
-        return view
-    }
-
-    func updateUIView(_ uiView: InlinePreviewPlayerView, context: Context) {
-        uiView.player = player
-    }
-}
-
-private final class InlinePreviewPlayerView: UIView {
-    var player: AVPlayer? {
-        didSet {
-            playerLayer.player = player
-        }
-    }
-
-    override static var layerClass: AnyClass {
-        AVPlayerLayer.self
-    }
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .black
-        playerLayer.videoGravity = .resizeAspect
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    private var playerLayer: AVPlayerLayer {
-        layer as! AVPlayerLayer
     }
 }
 

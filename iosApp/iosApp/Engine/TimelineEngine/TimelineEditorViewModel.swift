@@ -9,6 +9,8 @@ class TimelineEditorViewModel: ObservableObject {
     @Published var currentTime: CMTime = .zero
     @Published var isPlaying: Bool = false
     @Published var duration: CMTime = .zero
+    @Published private(set) var previewSeekCommand: PreviewSeekCommand?
+    @Published private(set) var isProjectLoading: Bool = false
     @Published private(set) var compositionFrame: CompositionFrame?
     @Published var tracks: [TrackDisplayModel] = []
     @Published var canUndo: Bool = false
@@ -26,8 +28,6 @@ class TimelineEditorViewModel: ObservableObject {
     private var engine = TimelineEngine()
     private let nativeEditorEngine = NativeEditorEngine()
     private let compositionEngine = CompositionEngine()
-    private var player: AVPlayer?
-    private var timeObserver: Any?
     private var cancellables = Set<AnyCancellable>()
     private var loadedProjectId: UUID?
 
@@ -49,10 +49,6 @@ class TimelineEditorViewModel: ObservableObject {
         duration.seconds > 0
     }
 
-    var previewPlayer: AVPlayer? {
-        player
-    }
-    
     init() {
         engine.timelinePublisher
             .receive(on: DispatchQueue.main)
@@ -76,7 +72,8 @@ class TimelineEditorViewModel: ObservableObject {
         url: URL,
         kind: PickedMediaKind,
         destination: ImportDestination,
-        at time: CMTime? = nil
+        at time: CMTime? = nil,
+        completion: (() -> Void)? = nil
     ) {
         let trackType: TrackType
         switch destination {
@@ -90,7 +87,12 @@ class TimelineEditorViewModel: ObservableObject {
 
         switch kind {
         case .video:
-            importVideoIntoNativeEngine(from: url, toTrackType: trackType, at: time ?? duration)
+            importVideoIntoNativeEngine(
+                from: url,
+                toTrackType: trackType,
+                at: time ?? duration,
+                completion: completion
+            )
         }
     }
 
@@ -100,6 +102,7 @@ class TimelineEditorViewModel: ObservableObject {
         }
 
         loadedProjectId = project.id
+        isProjectLoading = true
         projectName = project.name
         nativeEditorEngine.stop()
         engine.setTimeline(
@@ -126,7 +129,14 @@ class TimelineEditorViewModel: ObservableObject {
             destination = .audio
         }
 
-        importMedia(url: project.mediaUrl, kind: kind, destination: destination, at: .zero)
+        importMedia(
+            url: project.mediaUrl,
+            kind: kind,
+            destination: destination,
+            at: .zero
+        ) { [weak self] in
+            self?.isProjectLoading = false
+        }
     }
     
     func splitAtPlayhead() {
@@ -142,14 +152,12 @@ class TimelineEditorViewModel: ObservableObject {
         if didNativeSplit {
             applyNativeSnapshotToSwiftTimeline()
             refreshDisplay()
-            updatePlayer()
             return
         }
 
         let newIds = engine.splitAllClips(at: currentTime)
         if !newIds.isEmpty {
             refreshDisplay()
-            updatePlayer()
         }
     }
     
@@ -161,13 +169,11 @@ class TimelineEditorViewModel: ObservableObject {
         if didDeleteNatively {
             applyNativeSnapshotToSwiftTimeline()
             refreshDisplay()
-            updatePlayer()
             return
         }
 
         engine.removeClip(clipId, ripple: ripple)
         refreshDisplay()
-        updatePlayer()
     }
 
     func undo() {
@@ -177,7 +183,6 @@ class TimelineEditorViewModel: ObservableObject {
             engine.undo()
         }
         refreshDisplay()
-        updatePlayer()
     }
 
     func redo() {
@@ -187,7 +192,6 @@ class TimelineEditorViewModel: ObservableObject {
             engine.redo()
         }
         refreshDisplay()
-        updatePlayer()
     }
 
     func addTextOverlay() {
@@ -206,13 +210,11 @@ class TimelineEditorViewModel: ObservableObject {
         if didAddClip {
             applyNativeSnapshotToSwiftTimeline()
             refreshDisplay()
-            updatePlayer()
             return
         }
 
         engine.addTextOverlay()
         refreshDisplay()
-        updatePlayer()
     }
 
     func addDebugClip() {
@@ -231,72 +233,70 @@ class TimelineEditorViewModel: ObservableObject {
         if didAddClip {
             applyNativeSnapshotToSwiftTimeline()
             refreshDisplay()
-            updatePlayer()
             return
         }
 
         engine.addDebugClip()
         refreshDisplay()
-        updatePlayer()
     }
 
     func removeTrack(_ trackId: UUID) {
         if nativeEditorEngine.removeTrack(id: trackId) {
             applyNativeSnapshotToSwiftTimeline()
             refreshDisplay()
-            updatePlayer()
             return
         }
 
         engine.removeTrack(trackId)
         refreshDisplay()
-        updatePlayer()
     }
 
     func setTrackMuted(_ trackId: UUID, muted: Bool) {
         if nativeEditorEngine.setTrackMuted(id: trackId, muted: muted) {
             applyNativeSnapshotToSwiftTimeline()
             refreshDisplay()
-            updatePlayer()
             return
         }
 
         engine.muteTrack(trackId, muted: muted)
         refreshDisplay()
-        updatePlayer()
     }
 
     func setTrackLocked(_ trackId: UUID, locked: Bool) {
         if nativeEditorEngine.setTrackLocked(id: trackId, locked: locked) {
             applyNativeSnapshotToSwiftTimeline()
             refreshDisplay()
-            updatePlayer()
             return
         }
 
         engine.lockTrack(trackId, locked: locked)
         refreshDisplay()
-        updatePlayer()
     }
     
     func togglePlayback() {
         if isPlaying {
             nativeEditorEngine.pause()
-            player?.pause()
             isPlaying = false
         } else {
-            if player == nil {
-                updatePlayer()
-            }
             nativeEditorEngine.play()
-            player?.play()
             isPlaying = true
         }
     }
     
     func seek(to time: CMTime) {
         nativeEditorEngine.seek(to: time)
-        player?.seek(to: time)
+        previewSeekCommand = PreviewSeekCommand(timeSeconds: max(time.seconds, 0))
+    }
+
+    func syncPreviewDisplayTime(_ seconds: Double) {
+        let time = CMTime(seconds: max(seconds, 0), preferredTimescale: 600)
+        nativeEditorEngine.seek(to: time)
+    }
+
+    func syncPreviewPlaybackState(_ playing: Bool) {
+        if isPlaying != playing {
+            isPlaying = playing
+        }
     }
     
     func exportVideo() {
@@ -357,11 +357,6 @@ class TimelineEditorViewModel: ObservableObject {
         refreshCompositionFrame(at: currentTime)
     }
     
-    deinit {
-        if let timeObserver {
-            player?.removeTimeObserver(timeObserver)
-        }
-    }
 }
 
 struct TrackDisplayModel: Identifiable {
@@ -396,30 +391,6 @@ private extension TimelineEditorViewModel {
             return "Overlay"
         default:
             return "Clip"
-        }
-    }
-    
-    private func updatePlayer() {
-        if let timeObserver, let player {
-            player.removeTimeObserver(timeObserver)
-            self.timeObserver = nil
-        }
-
-        do {
-            let composition = try engine.buildComposition()
-            let playerItem = AVPlayerItem(asset: composition)
-            
-            player = AVPlayer(playerItem: playerItem)
-            
-            timeObserver = player?.addPeriodicTimeObserver(
-                forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
-                queue: .main
-            ) { [weak self] time in
-                self?.nativeEditorEngine.seek(to: time)
-            }
-        } catch {
-            print("Player error: \(error)")
-            player = nil
         }
     }
     
@@ -611,7 +582,8 @@ private extension TimelineEditorViewModel {
     private func importVideoIntoNativeEngine(
         from url: URL,
         toTrackType trackType: TrackType,
-        at time: CMTime
+        at time: CMTime,
+        completion: (() -> Void)? = nil
     ) {
         let asset = AVURLAsset(url: url)
 
@@ -624,6 +596,7 @@ private extension TimelineEditorViewModel {
             guard durationStatus == .loaded else {
                 DispatchQueue.main.async {
                     print("Import error: \(error?.localizedDescription ?? "Failed to load asset duration")")
+                    completion?()
                 }
                 return
             }
@@ -670,12 +643,13 @@ private extension TimelineEditorViewModel {
             DispatchQueue.main.async {
                 guard didAddClip else {
                     print("Import error: Failed to add clip to native timeline")
+                    completion?()
                     return
                 }
 
                 self.applyNativeSnapshotToSwiftTimeline()
                 self.refreshDisplay()
-                self.updatePlayer()
+                completion?()
             }
         }
     }
