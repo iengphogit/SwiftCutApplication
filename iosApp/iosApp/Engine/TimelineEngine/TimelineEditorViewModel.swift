@@ -322,7 +322,7 @@ class TimelineEditorViewModel: ObservableObject {
                 }
             }
         } catch {
-            print("Export error: \(error)")
+            AppLogger.log("Export error: \(error.localizedDescription)")
         }
     }
     
@@ -331,9 +331,9 @@ class TimelineEditorViewModel: ObservableObject {
             PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
         } completionHandler: { success, error in
             if success {
-                print("Saved to photo library")
+                AppLogger.log("Saved to photo library")
             } else if let error = error {
-                print("Save error: \(error)")
+                AppLogger.log("Save error: \(error.localizedDescription)")
             }
         }
     }
@@ -595,7 +595,7 @@ private extension TimelineEditorViewModel {
 
             guard durationStatus == .loaded else {
                 DispatchQueue.main.async {
-                    print("Import error: \(error?.localizedDescription ?? "Failed to load asset duration")")
+                    AppLogger.log("Import error: \(error?.localizedDescription ?? "Failed to load asset duration")")
                     completion?()
                 }
                 return
@@ -603,6 +603,7 @@ private extension TimelineEditorViewModel {
 
             let sourceRange = CMTimeRangeMake(start: .zero, duration: asset.duration)
             let timelineRange = CMTimeRangeMake(start: time, duration: asset.duration)
+            let hasEmbeddedAudio = !asset.tracks(withMediaType: .audio).isEmpty
 
             let didAddClip: Bool
             switch trackType {
@@ -642,9 +643,25 @@ private extension TimelineEditorViewModel {
 
             DispatchQueue.main.async {
                 guard didAddClip else {
-                    print("Import error: Failed to add clip to native timeline")
+                    AppLogger.log("Import error: Failed to add clip to native timeline")
                     completion?()
                     return
+                }
+
+                if trackType == .video && hasEmbeddedAudio {
+                    let didAddAudioClip = self.nativeEditorEngine.addClip(
+                        AudioClip(
+                            sourceUrl: url,
+                            sourceRange: sourceRange,
+                            timelineRange: timelineRange
+                        ),
+                        toTrackType: .audio,
+                        named: "Audio"
+                    )
+
+                    if !didAddAudioClip {
+                        AppLogger.log("Import warning: Failed to extract embedded audio to audio track")
+                    }
                 }
 
                 self.applyNativeSnapshotToSwiftTimeline()
