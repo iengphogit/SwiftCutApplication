@@ -272,15 +272,20 @@ struct TimelineEditorScreen: View {
                     leftTimelineColumn(leftChannelWidth: leftChannelWidth)
 
                     ZStack(alignment: .topLeading) {
-                        TimelineHorizontalScrollView(
-                            currentTime: max(viewModel.currentTime.seconds, 0),
-                            pointsPerSecond: 60 * zoomScale,
-                            onTimeChange: { seconds in
-                                viewModel.seek(
-                                    to: CMTime(seconds: seconds, preferredTimescale: 600)
-                                )
-                            }
-                        ) {
+                    TimelineHorizontalScrollView(
+                        currentTime: max(viewModel.currentTime.seconds, 0),
+                        zoomScale: zoomScale,
+                        pointsPerSecond: 60 * zoomScale,
+                        timelineZeroInset: leadingTimelineInset + rightLanePadding,
+                        onTimeChange: { seconds in
+                            viewModel.seek(
+                                to: CMTime(seconds: seconds, preferredTimescale: 600)
+                            )
+                        },
+                        onZoomChange: { updatedZoomScale in
+                            zoomScale = updatedZoomScale
+                        }
+                    ) {
                             VStack(spacing: 0) {
                                 timelineRuler(
                                     timelineWidth: timelineWidth,
@@ -377,24 +382,38 @@ struct TimelineEditorScreen: View {
         leadingTimelineInset: CGFloat,
         rightLanePadding: CGFloat
     ) -> some View {
-        HStack(spacing: 0) {
+        let ruler = rulerConfiguration(for: zoomScale)
+        let visibleDuration = max(viewModel.duration.seconds + ruler.majorInterval * 2, 30)
+        let tickCount = Int(ceil(visibleDuration / ruler.minorInterval)) + 1
+
+        return HStack(spacing: 0) {
             Color.clear
                 .frame(width: leadingTimelineInset)
 
-            ForEach(0..<Int(max(viewModel.duration.seconds + 5, 30)), id: \.self) { second in
-                VStack(alignment: .leading, spacing: 2) {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.5))
-                        .frame(width: 1, height: second % 5 == 0 ? 12 : 6)
+            ZStack(alignment: .topLeading) {
+                ForEach(0..<tickCount, id: \.self) { index in
+                    let tickTime = Double(index) * ruler.minorInterval
+                    let isMajorTick = isRulerTick(tickTime, interval: ruler.majorInterval)
+                    let isMediumTick = !isMajorTick && isRulerTick(
+                        tickTime,
+                        interval: ruler.mediumInterval
+                    )
 
-                    if second % 5 == 0 {
-                        Text(formatSecond(second))
-                            .font(.system(size: 8, weight: .medium))
-                            .foregroundColor(.gray)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.5))
+                            .frame(width: 1, height: isMajorTick ? 12 : (isMediumTick ? 9 : 6))
+
+                        if isMajorTick {
+                            Text(formatTimelineLabel(tickTime, step: ruler.majorInterval))
+                                .font(.system(size: 8, weight: .medium))
+                                .foregroundColor(.gray)
+                        }
                     }
+                    .offset(x: CGFloat(tickTime) * 60 * zoomScale)
                 }
-                .frame(width: 60 * zoomScale)
             }
+            .frame(width: max(timelineWidth - leadingTimelineInset - rightLanePadding, 0), alignment: .leading)
         }
         .padding(.leading, rightLanePadding)
         .frame(width: timelineWidth, height: 24, alignment: .leading)
@@ -460,6 +479,47 @@ struct TimelineEditorScreen: View {
         let mins = second / 60
         let secs = second % 60
         return String(format: "%d:%02d", mins, secs)
+    }
+
+    private func formatTimelineLabel(_ seconds: Double, step: Double) -> String {
+        let totalWholeSeconds = Int(seconds)
+        let mins = totalWholeSeconds / 60
+        let secs = totalWholeSeconds % 60
+
+        guard step < 1 else {
+            return String(format: "%d:%02d", mins, secs)
+        }
+
+        let fractional = Int(round((seconds - floor(seconds)) * 10))
+        if fractional == 0 {
+            return String(format: "%d:%02d", mins, secs)
+        }
+        return String(format: "%d:%02d.%d", mins, secs, fractional)
+    }
+
+    private func rulerConfiguration(for zoomScale: CGFloat) -> (
+        majorInterval: Double,
+        mediumInterval: Double,
+        minorInterval: Double
+    ) {
+        switch zoomScale {
+        case 2.5...:
+            return (0.5, 0.25, 0.1)
+        case 1.75..<2.5:
+            return (1, 0.5, 0.25)
+        case 1.1..<1.75:
+            return (2, 1, 0.5)
+        case 0.8..<1.1:
+            return (5, 2.5, 1)
+        default:
+            return (10, 5, 2)
+        }
+    }
+
+    private func isRulerTick(_ time: Double, interval: Double) -> Bool {
+        guard interval > 0 else { return false }
+        let quotient = time / interval
+        return abs(quotient.rounded() - quotient) < 0.0001
     }
 
     private func centeredPlayhead(xInLane: CGFloat) -> some View {
@@ -536,27 +596,39 @@ private struct NativeEnginePreviewHost: UIViewRepresentable {
 
 private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable {
     let currentTime: Double
+    let zoomScale: CGFloat
     let pointsPerSecond: CGFloat
+    let timelineZeroInset: CGFloat
     let onTimeChange: (Double) -> Void
+    let onZoomChange: (CGFloat) -> Void
     let content: Content
 
     init(
         currentTime: Double,
+        zoomScale: CGFloat,
         pointsPerSecond: CGFloat,
+        timelineZeroInset: CGFloat,
         onTimeChange: @escaping (Double) -> Void,
+        onZoomChange: @escaping (CGFloat) -> Void,
         @ViewBuilder content: () -> Content
     ) {
         self.currentTime = currentTime
+        self.zoomScale = zoomScale
         self.pointsPerSecond = pointsPerSecond
+        self.timelineZeroInset = timelineZeroInset
         self.onTimeChange = onTimeChange
+        self.onZoomChange = onZoomChange
         self.content = content()
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             hostingController: UIHostingController(rootView: content),
+            zoomScale: zoomScale,
             pointsPerSecond: pointsPerSecond,
-            onTimeChange: onTimeChange
+            timelineZeroInset: timelineZeroInset,
+            onTimeChange: onTimeChange,
+            onZoomChange: onZoomChange
         )
     }
 
@@ -568,6 +640,13 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         scrollView.bounces = true
         scrollView.delegate = context.coordinator
         scrollView.backgroundColor = .clear
+
+        let pinchGesture = UIPinchGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handlePinch(_:))
+        )
+        pinchGesture.delegate = context.coordinator
+        scrollView.addGestureRecognizer(pinchGesture)
 
         let hostedView = context.coordinator.hostingController.view!
         hostedView.backgroundColor = .clear
@@ -587,8 +666,25 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
 
     func updateUIView(_ uiView: UIScrollView, context: Context) {
         context.coordinator.hostingController.rootView = content
+        context.coordinator.zoomScale = zoomScale
         context.coordinator.pointsPerSecond = pointsPerSecond
+        context.coordinator.timelineZeroInset = timelineZeroInset
         context.coordinator.onTimeChange = onTimeChange
+        context.coordinator.onZoomChange = onZoomChange
+
+        if let pendingAnchor = context.coordinator.pendingZoomAnchor {
+            let anchoredOffsetX = max(
+                CGFloat(pendingAnchor.time) * pointsPerSecond + timelineZeroInset - pendingAnchor.locationX,
+                0
+            )
+            context.coordinator.isProgrammaticScroll = true
+            uiView.setContentOffset(CGPoint(x: anchoredOffsetX, y: uiView.contentOffset.y), animated: false)
+            context.coordinator.isProgrammaticScroll = false
+            context.coordinator.pendingZoomAnchor = nil
+            context.coordinator.lastCommittedZoomScale = zoomScale
+            onTimeChange(max(Double(anchoredOffsetX / max(pointsPerSecond, 1)), 0))
+            return
+        }
 
         let targetOffsetX = max(CGFloat(currentTime) * pointsPerSecond, 0)
         guard !context.coordinator.isUserInteracting,
@@ -602,21 +698,34 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         context.coordinator.isProgrammaticScroll = false
     }
 
-    final class Coordinator: NSObject, UIScrollViewDelegate {
+    final class Coordinator: NSObject, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         let hostingController: UIHostingController<Content>
+        var zoomScale: CGFloat
         var pointsPerSecond: CGFloat
+        var timelineZeroInset: CGFloat
         var onTimeChange: (Double) -> Void
+        var onZoomChange: (CGFloat) -> Void
         var isProgrammaticScroll = false
         var isUserInteracting = false
+        var pinchStartZoomScale: CGFloat = 1
+        var lastCommittedZoomScale: CGFloat
+        var pendingZoomAnchor: (time: Double, locationX: CGFloat)?
 
         init(
             hostingController: UIHostingController<Content>,
+            zoomScale: CGFloat,
             pointsPerSecond: CGFloat,
-            onTimeChange: @escaping (Double) -> Void
+            timelineZeroInset: CGFloat,
+            onTimeChange: @escaping (Double) -> Void,
+            onZoomChange: @escaping (CGFloat) -> Void
         ) {
             self.hostingController = hostingController
+            self.zoomScale = zoomScale
             self.pointsPerSecond = pointsPerSecond
+            self.timelineZeroInset = timelineZeroInset
             self.onTimeChange = onTimeChange
+            self.onZoomChange = onZoomChange
+            self.lastCommittedZoomScale = zoomScale
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -638,6 +747,41 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
 
         func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
             isUserInteracting = false
+        }
+
+        @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+            guard let scrollView = recognizer.view as? UIScrollView else { return }
+
+            switch recognizer.state {
+            case .began:
+                isUserInteracting = true
+                pinchStartZoomScale = zoomScale
+            case .changed:
+                let clampedZoomScale = min(max(pinchStartZoomScale * recognizer.scale, 0.5), 3.0)
+                guard abs(clampedZoomScale - lastCommittedZoomScale) > 0.01 else { return }
+
+                let locationX = recognizer.location(in: scrollView).x
+                let contentX = scrollView.contentOffset.x + locationX
+                let anchorTime = max(
+                    Double((contentX - timelineZeroInset) / max(pointsPerSecond, 1)),
+                    0
+                )
+
+                pendingZoomAnchor = (time: anchorTime, locationX: locationX)
+                lastCommittedZoomScale = clampedZoomScale
+                onZoomChange(clampedZoomScale)
+            case .ended, .cancelled, .failed:
+                isUserInteracting = false
+            default:
+                break
+            }
+        }
+        
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
         }
     }
 }

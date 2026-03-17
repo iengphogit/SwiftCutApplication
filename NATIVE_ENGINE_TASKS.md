@@ -132,6 +132,9 @@ Tasks:
 - playhead tied to playback clock
 - scrolling updates current time
 - current time updates scroll position
+- pinch-to-zoom anchored to the finger center, not the left edge
+- button zoom keeps the playhead time stable
+- ruler tick density adapts to zoom level over time
 
 Exit criteria:
 
