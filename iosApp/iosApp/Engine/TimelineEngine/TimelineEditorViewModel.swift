@@ -60,8 +60,10 @@ class TimelineEditorViewModel: ObservableObject {
         nativeEditorEngine.timePublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] time in
-                self?.currentTime = time
-                self?.refreshCompositionFrame(at: time)
+                guard let self else { return }
+                guard self.isPlaying else { return }
+                self.currentTime = time
+                self.refreshCompositionFrame(at: time)
             }
             .store(in: &cancellables)
         
@@ -121,9 +123,9 @@ class TimelineEditorViewModel: ObservableObject {
             )
         )
         nativeEditorEngine.syncTimeline(from: engine.timeline)
-        currentTime = .zero
         duration = .zero
         tracks = []
+        resetTimelinePositionToStart()
         refreshDisplay()
 
         loadProjectIntoSwiftTimeline(project) { [weak self] in
@@ -485,8 +487,11 @@ class TimelineEditorViewModel: ObservableObject {
     }
     
     func seek(to time: CMTime) {
-        nativeEditorEngine.seek(to: time)
-        previewSeekCommand = PreviewSeekCommand(timeSeconds: max(time.seconds, 0))
+        let clampedTime = CMTime(seconds: max(time.seconds, 0), preferredTimescale: 600)
+        currentTime = clampedTime
+        nativeEditorEngine.seek(to: clampedTime)
+        previewSeekCommand = PreviewSeekCommand(timeSeconds: clampedTime.seconds)
+        refreshCompositionFrame(at: clampedTime)
     }
 
     func previewScrub(to time: CMTime) {
@@ -496,8 +501,10 @@ class TimelineEditorViewModel: ObservableObject {
     }
 
     func syncPreviewDisplayTime(_ seconds: Double) {
+        guard isPlaying else { return }
         let time = CMTime(seconds: max(seconds, 0), preferredTimescale: 600)
-        nativeEditorEngine.seek(to: time)
+        currentTime = time
+        refreshCompositionFrame(at: time)
     }
 
     func syncPreviewPlaybackState(_ playing: Bool) {
@@ -1164,10 +1171,18 @@ private extension TimelineEditorViewModel {
                 }
 
                 self.nativeEditorEngine.syncTimeline(from: self.engine.timeline)
+                self.resetTimelinePositionToStart()
                 self.refreshDisplay()
                 completion?()
             }
         }
+    }
+
+    private func resetTimelinePositionToStart() {
+        currentTime = .zero
+        nativeEditorEngine.seek(to: .zero)
+        previewSeekCommand = PreviewSeekCommand(timeSeconds: 0)
+        refreshCompositionFrame(at: .zero)
     }
 }
 

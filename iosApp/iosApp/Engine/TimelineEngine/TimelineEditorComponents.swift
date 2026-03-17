@@ -181,6 +181,8 @@ struct HeaderGlassButton: View {
             Text(title)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -349,7 +351,10 @@ private struct TimelineClipItemView: View {
                 guard !isMoveGestureActive, !isLeadingTrimActive, !isTrailingTrimActive else { return }
                 onTap()
             }
-            .simultaneousGesture(canMove ? moveGesture : nil)
+            .modifier(ConditionalMoveGestureModifier(
+                isEnabled: canMove && isSelected,
+                moveGesture: moveGesture
+            ))
 
             if canMove {
                 HStack(spacing: 0) {
@@ -485,6 +490,19 @@ private struct TimelineClipItemView: View {
     }
 }
 
+private struct ConditionalMoveGestureModifier<GestureType: Gesture>: ViewModifier {
+    let isEnabled: Bool
+    let moveGesture: GestureType
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.simultaneousGesture(moveGesture)
+        } else {
+            content
+        }
+    }
+}
+
 struct TrackHeaderView: View {
     let track: TrackDisplayModel
     let leftChannelWidth: CGFloat
@@ -510,7 +528,7 @@ struct TrackHeaderView: View {
                     .foregroundColor(.white.opacity(0.82))
                     .lineLimit(1)
             }
-            .frame(minWidth: 42, alignment: .trailing)
+            .frame(minWidth: 42)
 
             HStack(spacing: 10) {
                 channelButton(
@@ -533,12 +551,8 @@ struct TrackHeaderView: View {
                     )
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .frame(width: max(leftChannelWidth - 26, 0), alignment: .trailing)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
+        .frame(width: max(leftChannelWidth - 26, 0))
         .padding(.vertical, 5)
         .background(
             Rectangle()
@@ -1031,9 +1045,12 @@ private enum TimelineClipVisualCache {
 }
 
 extension Array where Element == TrackDisplayModel {
+    var timelineContentDurationSeconds: Double {
+        flatMap(\.clips).map { $0.startSeconds + $0.durationSeconds }.max() ?? 30
+    }
+
     func timelineContentWidth(zoomScale: CGFloat) -> CGFloat {
-        let clipEnd = flatMap(\.clips).map { $0.startSeconds + $0.durationSeconds }.max() ?? 30
-        return Swift.max(CGFloat(clipEnd) * 60 * zoomScale, 100)
+        Swift.max(CGFloat(timelineContentDurationSeconds) * 60 * zoomScale, 100)
     }
 }
 

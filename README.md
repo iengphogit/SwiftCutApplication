@@ -17,6 +17,13 @@ frameworks.
 - Android & iOS friendly
 - KMM-ready architecture
 
+## Timeline Interaction
+- Horizontal dragging on the timeline lane is owned by the outer timeline scroll view by default.
+- Tapping a clip selects it.
+- Moving a clip requires the clip to already be selected, then long-press and drag on the clip body.
+- Leading and trailing trim handles remain dedicated drag zones even when the clip body is not selected for moving.
+- Vertical track scrolling should only activate when the visible track area is actually overflowed.
+
 ## Credits
 Developed in Cambodia 🇰🇭 by:
 - PHO ieng — iengpho@gmail.com

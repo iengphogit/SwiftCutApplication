@@ -16,8 +16,11 @@ struct TimelineEditorScreen: View {
     @State private var showVideoImportOptions = false
     @State private var mediaPickerTarget: MediaPickerTarget = .video
     @State private var importVideoWithAudio = true
-    @State private var zoomScale: CGFloat = 1.0
+    @State private var zoomScale: CGFloat = 1
     @State private var zoomAnchorRequest: TimelineZoomAnchorRequest?
+    @State private var showTimelineDebugLayout = false
+    @State private var timelineScrollMetrics = TimelineScrollMetrics()
+    @State private var requestedTimelineScrollOffsetX: CGFloat?
     @State private var isRatioPanelVisible = false
     @State private var isUhdPanelVisible = false
     @State private var selectedRatio: AspectRatio
@@ -109,7 +112,7 @@ struct TimelineEditorScreen: View {
     }
     
     private var headerSection: some View {
-        HStack {
+        return HStack(spacing: 10) {
             Button(action: onBack) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 18, weight: .semibold))
@@ -118,84 +121,102 @@ struct TimelineEditorScreen: View {
                     .background(Color(white: 0.2))
                     .clipShape(Circle())
             }
-            
-            Spacer()
 
-            HStack(spacing: 10) {
-                Button(action: { isRatioPanelVisible = true }) {
-                    HeaderGlassButton(
-                        title: selectedRatio.displayName,
-                        ratioIconSize: selectedRatio.iconSize
-                    )
-                }
-                .buttonStyle(.plain)
-                .popover(isPresented: $isRatioPanelVisible, arrowEdge: .top) {
-                    RatioGlassPanel(
-                        selectedRatio: selectedRatio,
-                        onSelect: { ratio in
-                            selectedRatio = ratio
-                            isRatioPanelVisible = false
-                            viewModel.updateProjectOutputSettings(
-                                aspectRatio: ratio,
-                                resolution: selectedResolution,
-                                frameRate: selectedFrameRate
-                            )
-                            onUpdateAspectRatio(ratio)
-                        }
-                    )
-                    .presentationCompactAdaptation(.popover)
-                }
+            Spacer(minLength: 0)
 
-                Button(action: { isUhdPanelVisible = true }) {
-                    HeaderGlassButton(title: selectedResolution.displayName)
-                }
-                .buttonStyle(.plain)
-                .popover(isPresented: $isUhdPanelVisible, arrowEdge: .top) {
-                    UhdGlassPanel(
-                        onSelectResolution: { resolution in
-                            selectedResolution = resolution
-                            viewModel.updateProjectOutputSettings(
-                                aspectRatio: selectedRatio,
-                                resolution: resolution,
-                                frameRate: selectedFrameRate
-                            )
-                            onUpdateUhdSettings(resolution, selectedFrameRate, selectedBitrate)
-                        },
-                        onSelectFrameRate: { frameRate in
-                            selectedFrameRate = frameRate
-                            viewModel.updateProjectOutputSettings(
-                                aspectRatio: selectedRatio,
-                                resolution: selectedResolution,
-                                frameRate: frameRate
-                            )
-                            onUpdateUhdSettings(selectedResolution, frameRate, selectedBitrate)
-                        },
-                        onSelectBitrate: { bitrate in
-                            selectedBitrate = bitrate
-                            onUpdateUhdSettings(selectedResolution, selectedFrameRate, bitrate)
-                        },
-                        onApply: { isUhdPanelVisible = false },
-                        selectedResolution: selectedResolution,
-                        selectedFrameRate: selectedFrameRate,
-                        selectedBitrate: selectedBitrate
-                    )
-                    .presentationCompactAdaptation(.popover)
-                }
-            }
-
-            Button(action: { viewModel.exportVideo() }) {
-                Text("Export")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.blue)
-                    .clipShape(Capsule())
+            ViewThatFits(in: .horizontal) {
+                headerTrailingControls(compactExport: false)
+                headerTrailingControls(compactExport: true)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Color(white: 0.1))
+    }
+
+    private func headerTrailingControls(compactExport: Bool) -> some View {
+        HStack(spacing: 10) {
+            Button(action: { isRatioPanelVisible = true }) {
+                HeaderGlassButton(
+                    title: selectedRatio.displayName,
+                    ratioIconSize: selectedRatio.iconSize
+                )
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $isRatioPanelVisible, arrowEdge: .top) {
+                RatioGlassPanel(
+                    selectedRatio: selectedRatio,
+                    onSelect: { ratio in
+                        selectedRatio = ratio
+                        isRatioPanelVisible = false
+                        viewModel.updateProjectOutputSettings(
+                            aspectRatio: ratio,
+                            resolution: selectedResolution,
+                            frameRate: selectedFrameRate
+                        )
+                        onUpdateAspectRatio(ratio)
+                    }
+                )
+                .presentationCompactAdaptation(.popover)
+            }
+
+            Button(action: { isUhdPanelVisible = true }) {
+                HeaderGlassButton(title: selectedResolution.displayName)
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $isUhdPanelVisible, arrowEdge: .top) {
+                UhdGlassPanel(
+                    onSelectResolution: { resolution in
+                        selectedResolution = resolution
+                        viewModel.updateProjectOutputSettings(
+                            aspectRatio: selectedRatio,
+                            resolution: resolution,
+                            frameRate: selectedFrameRate
+                        )
+                        onUpdateUhdSettings(resolution, selectedFrameRate, selectedBitrate)
+                    },
+                    onSelectFrameRate: { frameRate in
+                        selectedFrameRate = frameRate
+                        viewModel.updateProjectOutputSettings(
+                            aspectRatio: selectedRatio,
+                            resolution: selectedResolution,
+                            frameRate: frameRate
+                        )
+                        onUpdateUhdSettings(selectedResolution, frameRate, selectedBitrate)
+                    },
+                    onSelectBitrate: { bitrate in
+                        selectedBitrate = bitrate
+                        onUpdateUhdSettings(selectedResolution, selectedFrameRate, bitrate)
+                    },
+                    onApply: { isUhdPanelVisible = false },
+                    selectedResolution: selectedResolution,
+                    selectedFrameRate: selectedFrameRate,
+                    selectedBitrate: selectedBitrate
+                )
+                .presentationCompactAdaptation(.popover)
+            }
+
+            Button(action: { viewModel.exportVideo() }) {
+                if compactExport {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 36, height: 36)
+                        .background(Color.blue)
+                        .clipShape(Circle())
+                } else {
+                    Text("Export")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.blue)
+                        .clipShape(Capsule())
+                }
+            }
+        }
     }
     
     private func previewSection(geometry: GeometryProxy) -> some View {
@@ -210,10 +231,14 @@ struct TimelineEditorScreen: View {
                         desiredIsPlaying: viewModel.isPlaying,
                         seekCommand: viewModel.previewSeekCommand,
                         onDisplayTimeChange: { seconds in
-                            viewModel.syncPreviewDisplayTime(seconds)
+                            DispatchQueue.main.async {
+                                viewModel.syncPreviewDisplayTime(seconds)
+                            }
                         },
                         onPlaybackStateChange: { playing in
-                            viewModel.syncPreviewPlaybackState(playing)
+                            DispatchQueue.main.async {
+                                viewModel.syncPreviewPlaybackState(playing)
+                            }
                         }
                     )
                     .aspectRatio(selectedRatio.ratioValue, contentMode: .fit)
@@ -262,6 +287,15 @@ struct TimelineEditorScreen: View {
 
                 Spacer()
 
+                Button(action: { scrollTimelineByButton(delta: -timelineScrollButtonStep) }) {
+                    Image(systemName: "backward.frame.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(canScrollTimelineBackward ? .white.opacity(0.92) : .gray)
+                        .frame(width: 38, height: 38)
+                        .background(Color(white: 0.18))
+                        .clipShape(Circle())
+                }
+
                 Button(action: { viewModel.togglePlayback() }) {
                     Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 22, weight: .bold))
@@ -272,6 +306,15 @@ struct TimelineEditorScreen: View {
                 .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
                 .accessibilityValue(viewModel.isPlaying ? "playing" : "paused")
                 .accessibilityAddTraits(.isButton)
+
+                Button(action: { scrollTimelineByButton(delta: timelineScrollButtonStep) }) {
+                    Image(systemName: "forward.frame.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(canScrollTimelineForward ? .white.opacity(0.92) : .gray)
+                        .frame(width: 38, height: 38)
+                        .background(Color(white: 0.18))
+                        .clipShape(Circle())
+                }
 
                 Spacer()
             }
@@ -330,27 +373,40 @@ struct TimelineEditorScreen: View {
     
     private var timelineSection: some View {
         GeometryReader { geometry in
-            let leftChannelWidth = min(max(162, geometry.size.width * 0.36), 192)
-            let rightLanePadding: CGFloat = 10
-            let rightLaneWidth = geometry.size.width - leftChannelWidth
-            let playheadXInRightLane = max((geometry.size.width / 2) - leftChannelWidth, 0)
+            let viewportWidth = geometry.size.width
+            let rightLanePadding: CGFloat = 0
+            let leftChannelWidth = min(max(162, viewportWidth * 0.36), 192)
+            let rightLaneWidth = viewportWidth - leftChannelWidth
+            let playheadXInViewport = viewportWidth / 2
+            let playheadXInRightLane = max(playheadXInViewport - leftChannelWidth, 0)
             let leadingTimelineInset = max(playheadXInRightLane - rightLanePadding, 0)
-            let timelineWidth = max(
-                viewModel.tracks.timelineContentWidth(zoomScale: zoomScale) + leadingTimelineInset,
+            let realTimelineDuration = max(
+                viewModel.tracks.timelineContentDurationSeconds,
+                max(viewModel.duration.seconds, 0)
+            )
+            let effectiveTimelineDuration = max(realTimelineDuration * 3, 30)
+            let effectiveTimelineContentWidth = max(CGFloat(effectiveTimelineDuration) * 60 * zoomScale, 100)
+            let trailingTimelineSpacer = max(rightLaneWidth - playheadXInRightLane, 0)
+            let timelineContentWidth = max(
+                effectiveTimelineContentWidth + leadingTimelineInset + trailingTimelineSpacer,
+                leadingTimelineInset + rightLanePadding,
                 rightLaneWidth
             )
+            let hostedTimelineWidth = leftChannelWidth + timelineContentWidth
 
             VStack(spacing: 0) {
-                timelineHeader
-                HStack(spacing: 0) {
-                    leftTimelineColumn(leftChannelWidth: leftChannelWidth)
-
-                    ZStack(alignment: .topLeading) {
+                timelineHeaderRow(
+                    leftChannelWidth: leftChannelWidth,
+                    rightLaneWidth: rightLaneWidth
+                )
+                ZStack(alignment: .topLeading) {
                     TimelineHorizontalScrollView(
                         currentTime: max(viewModel.currentTime.seconds, 0),
+                        isPlaying: viewModel.isPlaying,
+                        contentWidth: hostedTimelineWidth,
                         zoomScale: zoomScale,
                         pointsPerSecond: 60 * zoomScale,
-                        timelineZeroInset: leadingTimelineInset + rightLanePadding,
+                        timelineZeroInset: leftChannelWidth + leadingTimelineInset + rightLanePadding,
                         zoomAnchorRequest: zoomAnchorRequest,
                         onTimePreviewChange: { seconds in
                             viewModel.previewScrub(
@@ -367,62 +423,117 @@ struct TimelineEditorScreen: View {
                         },
                         onZoomAnchorConsumed: {
                             zoomAnchorRequest = nil
+                        },
+                        onScrollMetricsChange: { metrics in
+                            timelineScrollMetrics = metrics
+                        },
+                        requestedContentOffsetX: requestedTimelineScrollOffsetX,
+                        onRequestedContentOffsetApplied: {
+                            requestedTimelineScrollOffsetX = nil
                         }
                     ) {
+                        HStack(spacing: 0) {
+                            leftTimelineColumn(leftChannelWidth: leftChannelWidth)
+                                .timelineDebugBox(show: showTimelineDebugLayout, fill: .orange, stroke: .orange)
+
                             VStack(spacing: 0) {
                                 timelineRuler(
-                                    timelineWidth: timelineWidth,
+                                    timelineWidth: timelineContentWidth,
                                     leadingTimelineInset: leadingTimelineInset,
-                                    rightLanePadding: rightLanePadding
+                                    rightLanePadding: 0
                                 )
+                                .timelineDebugBox(show: showTimelineDebugLayout, fill: .red, stroke: .red)
                                 tracksView(
-                                    timelineWidth: timelineWidth,
+                                    timelineWidth: timelineContentWidth,
                                     leadingTimelineInset: leadingTimelineInset,
-                                    rightLanePadding: rightLanePadding
+                                    rightLanePadding: 0
                                 )
+                                .timelineDebugBox(show: showTimelineDebugLayout, fill: .green, stroke: .green)
                             }
+                            .frame(width: timelineContentWidth, alignment: .leading)
+                            .timelineDebugBox(show: showTimelineDebugLayout, fill: .blue, stroke: .blue)
                         }
-                        centeredPlayhead(xInLane: playheadXInRightLane)
+                        .frame(width: hostedTimelineWidth, alignment: .leading)
                     }
-                    .frame(width: rightLaneWidth)
+                    centeredPlayhead(xInLane: playheadXInViewport)
+                    if showTimelineDebugLayout {
+                        timelineScrollDebugOverlay(
+                            viewportWidth: viewportWidth,
+                            leftChannelWidth: leftChannelWidth,
+                            rightLaneWidth: rightLaneWidth,
+                            hostedTimelineWidth: hostedTimelineWidth,
+                            timelineContentWidth: timelineContentWidth
+                        )
+                        .padding(8)
+                    }
                 }
+                .frame(width: viewportWidth)
+                .timelineDebugBox(show: showTimelineDebugLayout, fill: .purple, stroke: .purple)
+                scrollbarFooterRow(
+                    leftChannelWidth: leftChannelWidth,
+                    rightLaneWidth: rightLaneWidth
+                )
             }
             .background(Color(white: 0.05))
         }
         .frame(height: 272)
     }
     
-    private var timelineHeader: some View {
-        HStack {
-            Text("\(viewModel.currentTimeString) / \(viewModel.durationString)")
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.86))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            
-            Spacer()
-            
-            HStack(spacing: 12) {
-                Button(action: { updateZoomScale(max(0.5, zoomScale - 0.25)) }) {
-                    Image(systemName: "minus")
-                        .foregroundColor(.gray)
+    private func timelineHeaderRow(leftChannelWidth: CGFloat, rightLaneWidth: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(Color.white.opacity(0.04))
+                .frame(width: leftChannelWidth, height: 40)
+                .overlay(
+                    Text("Timeline")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.52))
+                )
+
+            HStack(spacing: 10) {
+                Text("\(viewModel.currentTimeString) / \(viewModel.durationString)")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.86))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                #if DEBUG
+                Button(action: { showTimelineDebugLayout.toggle() }) {
+                    Text(showTimelineDebugLayout ? "Debug On" : "Debug Off")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(showTimelineDebugLayout ? .black : .white.opacity(0.82))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(showTimelineDebugLayout ? Color.yellow : Color.white.opacity(0.08))
+                        .clipShape(Capsule())
                 }
-                
-                Text("\(Int(zoomScale * 100))%")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.gray)
-                    .frame(width: 40)
-                
-                Button(action: { updateZoomScale(min(3.0, zoomScale + 0.25)) }) {
-                    Image(systemName: "plus")
+                #endif
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 12) {
+                    Button(action: { updateZoomScale(max(0.5, zoomScale - 0.25)) }) {
+                        Image(systemName: "minus")
+                            .foregroundColor(.gray)
+                    }
+
+                    Text("\(Int(zoomScale * 100))%")
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.gray)
+                        .frame(width: 40)
+
+                    Button(action: { updateZoomScale(min(3, zoomScale + 0.25)) }) {
+                        Image(systemName: "plus")
+                            .foregroundColor(.gray)
+                    }
                 }
             }
+            .padding(.horizontal, 12)
+            .frame(width: rightLaneWidth, height: 40)
+            .background(Color.white.opacity(0.03))
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
     }
     
     private func leftTimelineColumn(leftChannelWidth: CGFloat) -> some View {
@@ -436,28 +547,10 @@ struct TimelineEditorScreen: View {
                         .foregroundColor(.white.opacity(0.6))
                 )
 
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 8) {
-                    ForEach(viewModel.tracks) { track in
-                        TrackHeaderView(
-                            track: track,
-                            leftChannelWidth: leftChannelWidth,
-                            onToggleMute: {
-                                viewModel.setTrackMuted(track.id, muted: !track.isMuted)
-                            },
-                            onToggleLock: {
-                                viewModel.setTrackLocked(track.id, locked: !track.isLocked)
-                            },
-                            onRemoveTrack: {
-                                viewModel.removeTrack(track.id)
-                            }
-                        )
-                    }
-                }
-                .padding(.vertical, 8)
-            }
+            leftTrackRows(leftChannelWidth: leftChannelWidth)
             .frame(maxHeight: 200)
         }
+        .timelineDebugBox(show: showTimelineDebugLayout, fill: .orange, stroke: .orange)
     }
 
     private func timelineRuler(
@@ -465,8 +558,11 @@ struct TimelineEditorScreen: View {
         leadingTimelineInset: CGFloat,
         rightLanePadding: CGFloat
     ) -> some View {
-        let ruler = rulerConfiguration(for: zoomScale)
-        let visibleDuration = max(viewModel.duration.seconds + ruler.majorInterval * 2, 30)
+        let pixelsPerSecond = 60 * zoomScale
+        let ruler = rulerConfiguration(pointsPerSecond: pixelsPerSecond)
+        let visibleDuration = Double(
+            max(timelineWidth - leadingTimelineInset - rightLanePadding, 0) / max(pixelsPerSecond, 1)
+        )
         let tickCount = Int(ceil(visibleDuration / ruler.minorInterval)) + 1
 
         return HStack(spacing: 0) {
@@ -493,7 +589,7 @@ struct TimelineEditorScreen: View {
                                 .foregroundColor(.gray)
                         }
                     }
-                    .offset(x: CGFloat(tickTime) * 60 * zoomScale)
+                    .offset(x: CGFloat(tickTime) * pixelsPerSecond)
                 }
             }
             .frame(width: max(timelineWidth - leadingTimelineInset - rightLanePadding, 0), alignment: .leading)
@@ -508,46 +604,164 @@ struct TimelineEditorScreen: View {
         leadingTimelineInset: CGFloat,
         rightLanePadding: CGFloat
     ) -> some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(spacing: 8) {
-                ForEach(viewModel.tracks) { track in
-                    TrackLaneView(
-                        track: track,
-                        timelineWidth: timelineWidth,
-                        leadingTimelineInset: leadingTimelineInset,
-                        rightLanePadding: rightLanePadding,
-                        zoomScale: zoomScale,
-                        selectedClipId: $selectedClipId,
-                        onClipTap: { clipId in
-                            selectedClipId = selectedClipId == clipId ? nil : clipId
-                        },
-                        onClipMove: { clipId, newStartSeconds in
-                            viewModel.moveClip(
-                                clipId,
-                                to: CMTime(seconds: newStartSeconds, preferredTimescale: 600)
-                            )
-                        },
-                        onClipTrimLeading: { clipId, timelineStartSeconds, sourceStartSeconds, sourceDurationSeconds in
-                            viewModel.trimClipLeadingEdge(
-                                clipId,
-                                timelineStartSeconds: timelineStartSeconds,
-                                sourceStartSeconds: sourceStartSeconds,
-                                sourceDurationSeconds: sourceDurationSeconds
-                            )
-                        },
-                        onClipTrimTrailing: { clipId, sourceStartSeconds, sourceDurationSeconds in
-                            viewModel.trimClipTrailingEdge(
-                                clipId,
-                                sourceStartSeconds: sourceStartSeconds,
-                                sourceDurationSeconds: sourceDurationSeconds
-                            )
-                        }
-                    )
-                }
-            }
-            .padding(.vertical, 8)
-        }
+        rightTrackRows(
+            timelineWidth: timelineWidth,
+            leadingTimelineInset: leadingTimelineInset,
+            rightLanePadding: rightLanePadding
+        )
         .frame(maxHeight: 200)
+        .timelineDebugBox(show: showTimelineDebugLayout, fill: .mint, stroke: .mint)
+    }
+
+    @ViewBuilder
+    private func leftTrackRows(leftChannelWidth: CGFloat) -> some View {
+        trackHeaderStack(leftChannelWidth: leftChannelWidth)
+    }
+
+    @ViewBuilder
+    private func rightTrackRows(
+        timelineWidth: CGFloat,
+        leadingTimelineInset: CGFloat,
+        rightLanePadding: CGFloat
+    ) -> some View {
+        trackLaneStack(
+            timelineWidth: timelineWidth,
+            leadingTimelineInset: leadingTimelineInset,
+            rightLanePadding: rightLanePadding
+        )
+    }
+
+    private func trackHeaderStack(leftChannelWidth: CGFloat) -> some View {
+        LazyVStack(spacing: 8) {
+            ForEach(viewModel.tracks) { track in
+                TrackHeaderView(
+                    track: track,
+                    leftChannelWidth: leftChannelWidth,
+                    onToggleMute: {
+                        viewModel.setTrackMuted(track.id, muted: !track.isMuted)
+                    },
+                    onToggleLock: {
+                        viewModel.setTrackLocked(track.id, locked: !track.isLocked)
+                    },
+                    onRemoveTrack: {
+                        viewModel.removeTrack(track.id)
+                    }
+                )
+            }
+        }
+        .padding(.top, 0)
+        .padding(.bottom, 8)
+        .timelineDebugBox(show: showTimelineDebugLayout, fill: .yellow, stroke: .yellow)
+    }
+
+    private func trackLaneStack(
+        timelineWidth: CGFloat,
+        leadingTimelineInset: CGFloat,
+        rightLanePadding: CGFloat
+    ) -> some View {
+        LazyVStack(spacing: 8) {
+            ForEach(viewModel.tracks) { track in
+                trackLaneRow(
+                    track: track,
+                    timelineWidth: timelineWidth,
+                    leadingTimelineInset: leadingTimelineInset,
+                    rightLanePadding: rightLanePadding
+                )
+            }
+        }
+        .padding(.top, 0)
+        .padding(.bottom, 8)
+        .timelineDebugBox(show: showTimelineDebugLayout, fill: .green, stroke: .green)
+    }
+
+    private func trackLaneRow(
+        track: TrackDisplayModel,
+        timelineWidth: CGFloat,
+        leadingTimelineInset: CGFloat,
+        rightLanePadding: CGFloat
+    ) -> some View {
+        TrackLaneView(
+            track: track,
+            timelineWidth: timelineWidth,
+            leadingTimelineInset: leadingTimelineInset,
+            rightLanePadding: rightLanePadding,
+            zoomScale: zoomScale,
+            selectedClipId: $selectedClipId,
+            onClipTap: { clipId in
+                selectedClipId = selectedClipId == clipId ? nil : clipId
+            },
+            onClipMove: { clipId, newStartSeconds in
+                viewModel.moveClip(
+                    clipId,
+                    to: CMTime(seconds: newStartSeconds, preferredTimescale: 600)
+                )
+            },
+            onClipTrimLeading: { clipId, timelineStartSeconds, sourceStartSeconds, sourceDurationSeconds in
+                viewModel.trimClipLeadingEdge(
+                    clipId,
+                    timelineStartSeconds: timelineStartSeconds,
+                    sourceStartSeconds: sourceStartSeconds,
+                    sourceDurationSeconds: sourceDurationSeconds
+                )
+            },
+            onClipTrimTrailing: { clipId, sourceStartSeconds, sourceDurationSeconds in
+                viewModel.trimClipTrailingEdge(
+                    clipId,
+                    sourceStartSeconds: sourceStartSeconds,
+                    sourceDurationSeconds: sourceDurationSeconds
+                )
+            }
+        )
+    }
+
+    private func scrollbarFooterRow(leftChannelWidth: CGFloat, rightLaneWidth: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(Color.white.opacity(0.04))
+                .frame(width: leftChannelWidth, height: 14)
+                .overlay(
+                    Rectangle()
+                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                )
+
+            TimelineScrollbarTrack(
+                metrics: timelineScrollMetrics,
+                width: rightLaneWidth,
+                onScrollRequest: { offsetX in
+                    requestedTimelineScrollOffsetX = offsetX
+                }
+            )
+            .frame(width: rightLaneWidth, height: 14)
+        }
+        .frame(height: 14)
+    }
+
+    private func timelineScrollDebugOverlay(
+        viewportWidth: CGFloat,
+        leftChannelWidth: CGFloat,
+        rightLaneWidth: CGFloat,
+        hostedTimelineWidth: CGFloat,
+        timelineContentWidth: CGFloat
+    ) -> some View {
+        let maxOffset = max(timelineScrollMetrics.contentWidth - timelineScrollMetrics.visibleWidth, 0)
+
+        return VStack(alignment: .leading, spacing: 3) {
+            Text("viewport \(Int(viewportWidth))  left \(Int(leftChannelWidth))  right \(Int(rightLaneWidth))")
+            Text("hosted \(Int(hostedTimelineWidth))  timeline \(Int(timelineContentWidth))")
+            Text("visible \(Int(timelineScrollMetrics.visibleWidth))  content \(Int(timelineScrollMetrics.contentWidth))")
+            Text("offset \(Int(timelineScrollMetrics.offsetX)) / \(Int(maxOffset))")
+        }
+        .font(.system(size: 10, weight: .medium, design: .monospaced))
+        .foregroundColor(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color.black.opacity(0.72))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.yellow.opacity(0.85), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .allowsHitTesting(false)
     }
     
     private var bottomToolsSection: some View {
@@ -584,6 +798,30 @@ struct TimelineEditorScreen: View {
         return String(format: "%d:%02d", mins, secs)
     }
 
+    private var timelineScrollButtonStep: CGFloat {
+        max(timelineScrollMetrics.visibleWidth * 0.45, 120)
+    }
+
+    private var maxTimelineOffsetX: CGFloat {
+        max(timelineScrollMetrics.contentWidth - timelineScrollMetrics.visibleWidth, 0)
+    }
+
+    private var canScrollTimelineBackward: Bool {
+        timelineScrollMetrics.offsetX > 1
+    }
+
+    private var canScrollTimelineForward: Bool {
+        timelineScrollMetrics.offsetX < maxTimelineOffsetX - 1
+    }
+
+    private func scrollTimelineByButton(delta: CGFloat) {
+        let targetOffsetX = min(
+            max(timelineScrollMetrics.offsetX + delta, 0),
+            maxTimelineOffsetX
+        )
+        requestedTimelineScrollOffsetX = targetOffsetX
+    }
+
     private func formatTimelineLabel(_ seconds: Double, step: Double) -> String {
         let totalWholeSeconds = Int(seconds)
         let mins = totalWholeSeconds / 60
@@ -600,23 +838,29 @@ struct TimelineEditorScreen: View {
         return String(format: "%d:%02d.%d", mins, secs, fractional)
     }
 
-    private func rulerConfiguration(for zoomScale: CGFloat) -> (
+    private func rulerConfiguration(pointsPerSecond: CGFloat) -> (
         majorInterval: Double,
         mediumInterval: Double,
         minorInterval: Double
     ) {
-        switch zoomScale {
-        case 2.5...:
-            return (0.5, 0.25, 0.1)
-        case 1.75..<2.5:
-            return (1, 0.5, 0.25)
-        case 1.1..<1.75:
-            return (2, 1, 0.5)
-        case 0.8..<1.1:
-            return (5, 2.5, 1)
-        default:
-            return (10, 5, 2)
+        let targetMinorPixels: CGFloat = 12
+        let rawMinorInterval = Double(targetMinorPixels / max(pointsPerSecond, 1))
+        let cleanIntervals: [Double] = [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60]
+        let minorInterval = cleanIntervals.first(where: { $0 >= rawMinorInterval }) ?? 60
+
+        if minorInterval < 1 {
+            return (
+                majorInterval: minorInterval * 5,
+                mediumInterval: minorInterval * 2.5,
+                minorInterval: minorInterval
+            )
         }
+
+        return (
+            majorInterval: minorInterval * 5,
+            mediumInterval: minorInterval * 2,
+            minorInterval: minorInterval
+        )
     }
 
     private func isRulerTick(_ time: Double, interval: Double) -> Bool {
@@ -668,14 +912,39 @@ struct TimelineEditorScreen: View {
     }
 }
 
+private extension View {
+    @ViewBuilder
+    func timelineDebugBox(show: Bool, fill: Color, stroke: Color) -> some View {
+        if show {
+            self
+                .background(fill.opacity(0.14))
+                .overlay(
+                    Rectangle()
+                        .stroke(stroke.opacity(0.9), lineWidth: 1)
+                )
+                .allowsHitTesting(false)
+        } else {
+            self
+        }
+    }
+}
+
 private struct TimelineZoomAnchorRequest: Equatable {
     let id = UUID()
     let anchorTime: Double
     let locationX: CGFloat?
 }
 
+private struct TimelineScrollMetrics: Equatable {
+    var offsetX: CGFloat = 0
+    var visibleWidth: CGFloat = 0
+    var contentWidth: CGFloat = 0
+}
+
 private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable {
     let currentTime: Double
+    let isPlaying: Bool
+    let contentWidth: CGFloat
     let zoomScale: CGFloat
     let pointsPerSecond: CGFloat
     let timelineZeroInset: CGFloat
@@ -684,10 +953,15 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
     let onTimeCommit: (Double) -> Void
     let onZoomChange: (CGFloat) -> Void
     let onZoomAnchorConsumed: () -> Void
+    let onScrollMetricsChange: (TimelineScrollMetrics) -> Void
+    let requestedContentOffsetX: CGFloat?
+    let onRequestedContentOffsetApplied: () -> Void
     let content: Content
 
     init(
         currentTime: Double,
+        isPlaying: Bool,
+        contentWidth: CGFloat,
         zoomScale: CGFloat,
         pointsPerSecond: CGFloat,
         timelineZeroInset: CGFloat,
@@ -696,9 +970,14 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         onTimeCommit: @escaping (Double) -> Void,
         onZoomChange: @escaping (CGFloat) -> Void,
         onZoomAnchorConsumed: @escaping () -> Void,
+        onScrollMetricsChange: @escaping (TimelineScrollMetrics) -> Void,
+        requestedContentOffsetX: CGFloat?,
+        onRequestedContentOffsetApplied: @escaping () -> Void,
         @ViewBuilder content: () -> Content
     ) {
         self.currentTime = currentTime
+        self.isPlaying = isPlaying
+        self.contentWidth = contentWidth
         self.zoomScale = zoomScale
         self.pointsPerSecond = pointsPerSecond
         self.timelineZeroInset = timelineZeroInset
@@ -707,19 +986,24 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         self.onTimeCommit = onTimeCommit
         self.onZoomChange = onZoomChange
         self.onZoomAnchorConsumed = onZoomAnchorConsumed
+        self.onScrollMetricsChange = onScrollMetricsChange
+        self.requestedContentOffsetX = requestedContentOffsetX
+        self.onRequestedContentOffsetApplied = onRequestedContentOffsetApplied
         self.content = content()
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             hostingController: UIHostingController(rootView: content),
+            hostedWidth: contentWidth,
             zoomScale: zoomScale,
             pointsPerSecond: pointsPerSecond,
             timelineZeroInset: timelineZeroInset,
             onTimePreviewChange: onTimePreviewChange,
             onTimeCommit: onTimeCommit,
             onZoomChange: onZoomChange,
-            onZoomAnchorConsumed: onZoomAnchorConsumed
+            onZoomAnchorConsumed: onZoomAnchorConsumed,
+            onScrollMetricsChange: onScrollMetricsChange
         )
     }
 
@@ -729,6 +1013,9 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         scrollView.showsVerticalScrollIndicator = false
         scrollView.alwaysBounceHorizontal = true
         scrollView.bounces = true
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.contentInset = .zero
+        scrollView.scrollIndicatorInsets = .zero
         scrollView.delegate = context.coordinator
         scrollView.backgroundColor = .clear
 
@@ -742,6 +1029,9 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         let hostedView = context.coordinator.hostingController.view!
         hostedView.backgroundColor = .clear
         hostedView.translatesAutoresizingMaskIntoConstraints = false
+        hostedView.insetsLayoutMarginsFromSafeArea = false
+        hostedView.layoutMargins = .zero
+        hostedView.directionalLayoutMargins = .zero
         scrollView.addSubview(hostedView)
 
         NSLayoutConstraint.activate([
@@ -749,14 +1039,21 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             hostedView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
             hostedView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
             hostedView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
-            hostedView.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor)
+            hostedView.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor),
+            context.coordinator.hostedWidthConstraint
         ])
 
         return scrollView
     }
 
     func updateUIView(_ uiView: UIScrollView, context: Context) {
-        context.coordinator.hostingController.rootView = content
+        if context.coordinator.isUserInteracting || context.coordinator.isPinchZooming {
+            context.coordinator.pendingRootView = content
+        } else {
+            context.coordinator.hostingController.rootView = content
+            context.coordinator.pendingRootView = nil
+        }
+        context.coordinator.hostedWidthConstraint.constant = contentWidth
         context.coordinator.zoomScale = zoomScale
         context.coordinator.pointsPerSecond = pointsPerSecond
         context.coordinator.timelineZeroInset = timelineZeroInset
@@ -764,6 +1061,27 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         context.coordinator.onTimeCommit = onTimeCommit
         context.coordinator.onZoomChange = onZoomChange
         context.coordinator.onZoomAnchorConsumed = onZoomAnchorConsumed
+        context.coordinator.onScrollMetricsChange = onScrollMetricsChange
+        uiView.layoutIfNeeded()
+        context.coordinator.hostingController.view.layoutIfNeeded()
+        context.coordinator.reportScrollMetricsAsync(for: uiView)
+
+        if let requestedContentOffsetX {
+            context.coordinator.applyProgrammaticOffset(
+                requestedContentOffsetX,
+                to: uiView
+            ) {
+                let requestedSeconds = context.coordinator.timelineTime(
+                    forContentOffsetX: requestedContentOffsetX
+                )
+                DispatchQueue.main.async {
+                    onTimePreviewChange(requestedSeconds)
+                    onTimeCommit(requestedSeconds)
+                    onRequestedContentOffsetApplied()
+                }
+            }
+            return
+        }
 
         if let zoomAnchorRequest,
            context.coordinator.lastHandledZoomAnchorId != zoomAnchorRequest.id {
@@ -779,34 +1097,40 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
                 CGFloat(pendingAnchor.time) * pointsPerSecond + timelineZeroInset - pendingAnchor.locationX,
                 0
             )
-            context.coordinator.isProgrammaticScroll = true
-            uiView.setContentOffset(CGPoint(x: anchoredOffsetX, y: uiView.contentOffset.y), animated: false)
-            context.coordinator.isProgrammaticScroll = false
             context.coordinator.pendingZoomAnchor = nil
             context.coordinator.lastCommittedZoomScale = zoomScale
-            let anchoredSeconds = max(Double(anchoredOffsetX / max(pointsPerSecond, 1)), 0)
-            DispatchQueue.main.async {
-                onTimePreviewChange(anchoredSeconds)
-                onTimeCommit(anchoredSeconds)
-                onZoomAnchorConsumed()
+            context.coordinator.applyProgrammaticOffset(
+                anchoredOffsetX,
+                to: uiView
+            ) {
+                let anchoredSeconds = context.coordinator.timelineTime(forContentOffsetX: anchoredOffsetX)
+                DispatchQueue.main.async {
+                    onTimePreviewChange(anchoredSeconds)
+                    onTimeCommit(anchoredSeconds)
+                    onZoomAnchorConsumed()
+                }
             }
             return
         }
 
         let targetOffsetX = max(CGFloat(currentTime) * pointsPerSecond, 0)
+        let isTrailingPastCommittedTime = !isPlaying && uiView.contentOffset.x > targetOffsetX + 1
         guard !context.coordinator.isUserInteracting,
+              !isTrailingPastCommittedTime,
               abs(uiView.contentOffset.x - targetOffsetX) > 1
         else {
             return
         }
 
-        context.coordinator.isProgrammaticScroll = true
-        uiView.setContentOffset(CGPoint(x: targetOffsetX, y: uiView.contentOffset.y), animated: false)
-        context.coordinator.isProgrammaticScroll = false
+        context.coordinator.applyProgrammaticOffset(
+            targetOffsetX,
+            to: uiView
+        )
     }
 
     final class Coordinator: NSObject, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         let hostingController: UIHostingController<Content>
+        let hostedWidthConstraint: NSLayoutConstraint
         var zoomScale: CGFloat
         var pointsPerSecond: CGFloat
         var timelineZeroInset: CGFloat
@@ -814,9 +1138,12 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         var onTimeCommit: (Double) -> Void
         var onZoomChange: (CGFloat) -> Void
         var onZoomAnchorConsumed: () -> Void
+        var onScrollMetricsChange: (TimelineScrollMetrics) -> Void
         var isProgrammaticScroll = false
         var isUserInteracting = false
         var isPinchZooming = false
+        var hasAppliedDeferredInitialOffset = false
+        var pendingRootView: Content?
         var pinchStartZoomScale: CGFloat = 1
         var lastCommittedZoomScale: CGFloat
         var lastHandledZoomAnchorId: UUID?
@@ -824,15 +1151,20 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
 
         init(
             hostingController: UIHostingController<Content>,
+            hostedWidth: CGFloat,
             zoomScale: CGFloat,
             pointsPerSecond: CGFloat,
             timelineZeroInset: CGFloat,
             onTimePreviewChange: @escaping (Double) -> Void,
             onTimeCommit: @escaping (Double) -> Void,
             onZoomChange: @escaping (CGFloat) -> Void,
-            onZoomAnchorConsumed: @escaping () -> Void
+            onZoomAnchorConsumed: @escaping () -> Void,
+            onScrollMetricsChange: @escaping (TimelineScrollMetrics) -> Void
         ) {
             self.hostingController = hostingController
+            self.hostedWidthConstraint = hostingController.view.widthAnchor.constraint(
+                equalToConstant: hostedWidth
+            )
             self.zoomScale = zoomScale
             self.pointsPerSecond = pointsPerSecond
             self.timelineZeroInset = timelineZeroInset
@@ -840,6 +1172,7 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             self.onTimeCommit = onTimeCommit
             self.onZoomChange = onZoomChange
             self.onZoomAnchorConsumed = onZoomAnchorConsumed
+            self.onScrollMetricsChange = onScrollMetricsChange
             self.lastCommittedZoomScale = zoomScale
         }
 
@@ -850,22 +1183,31 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             guard !isProgrammaticScroll, !isPinchZooming else { return }
 
-            let seconds = max(scrollView.contentOffset.x / max(pointsPerSecond, 1), 0)
-            onTimePreviewChange(seconds)
+            reportScrollMetricsAsync(for: scrollView)
+            let seconds = timelineTime(forContentOffsetX: scrollView.contentOffset.x)
+            DispatchQueue.main.async {
+                self.onTimePreviewChange(seconds)
+            }
         }
 
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-            let seconds = max(scrollView.contentOffset.x / max(pointsPerSecond, 1), 0)
-            onTimeCommit(seconds)
+            let seconds = timelineTime(forContentOffsetX: scrollView.contentOffset.x)
+            DispatchQueue.main.async {
+                self.onTimeCommit(seconds)
+            }
             if !decelerate {
                 isUserInteracting = false
+                applyPendingRootViewIfNeeded()
             }
         }
 
         func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-            let seconds = max(scrollView.contentOffset.x / max(pointsPerSecond, 1), 0)
-            onTimeCommit(seconds)
+            let seconds = timelineTime(forContentOffsetX: scrollView.contentOffset.x)
+            DispatchQueue.main.async {
+                self.onTimeCommit(seconds)
+            }
             isUserInteracting = false
+            applyPendingRootViewIfNeeded()
         }
 
         @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
@@ -878,7 +1220,7 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
                 pinchStartZoomScale = zoomScale
                 scrollView.panGestureRecognizer.isEnabled = false
             case .changed:
-                let clampedZoomScale = min(max(pinchStartZoomScale * recognizer.scale, 0.5), 3.0)
+                let clampedZoomScale = min(max(pinchStartZoomScale * recognizer.scale, 0.5), 3)
                 guard abs(clampedZoomScale - lastCommittedZoomScale) > 0.01 else { return }
 
                 let locationX = recognizer.location(in: scrollView).x
@@ -895,19 +1237,152 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
                 isPinchZooming = false
                 isUserInteracting = false
                 scrollView.panGestureRecognizer.isEnabled = true
-                let seconds = max(scrollView.contentOffset.x / max(pointsPerSecond, 1), 0)
-                onTimePreviewChange(seconds)
-                onTimeCommit(seconds)
+                let seconds = timelineTime(forContentOffsetX: scrollView.contentOffset.x)
+                DispatchQueue.main.async {
+                    self.onTimePreviewChange(seconds)
+                    self.onTimeCommit(seconds)
+                }
+                applyPendingRootViewIfNeeded()
             default:
                 break
             }
         }
-        
+
+        func applyPendingRootViewIfNeeded() {
+            guard let pendingRootView else { return }
+            hostingController.rootView = pendingRootView
+            self.pendingRootView = nil
+        }
+
+        func applyProgrammaticOffset(
+            _ targetOffsetX: CGFloat,
+            to scrollView: UIScrollView,
+            completion: (() -> Void)? = nil
+        ) {
+            let applyOffset = {
+                self.isProgrammaticScroll = true
+                scrollView.setContentOffset(
+                    CGPoint(x: targetOffsetX, y: scrollView.contentOffset.y),
+                    animated: false
+                )
+                self.isProgrammaticScroll = false
+                self.reportScrollMetricsAsync(for: scrollView)
+                completion?()
+            }
+
+            scrollView.layoutIfNeeded()
+            hostingController.view.layoutIfNeeded()
+
+            let hasValidViewport = scrollView.bounds.width > 0
+            let hasValidContent = scrollView.contentSize.width > 0
+
+            if hasValidViewport && hasValidContent {
+                hasAppliedDeferredInitialOffset = true
+                applyOffset()
+                return
+            }
+
+            guard !hasAppliedDeferredInitialOffset else {
+                applyOffset()
+                return
+            }
+
+            hasAppliedDeferredInitialOffset = true
+            DispatchQueue.main.async { [weak scrollView] in
+                guard let scrollView else { return }
+                scrollView.layoutIfNeeded()
+                self.hostingController.view.layoutIfNeeded()
+                applyOffset()
+            }
+        }
+
+        func timelineTime(forContentOffsetX offsetX: CGFloat) -> Double {
+            max(offsetX / max(pointsPerSecond, 1), 0)
+        }
+
+        func reportScrollMetrics(for scrollView: UIScrollView) {
+            onScrollMetricsChange(
+                TimelineScrollMetrics(
+                    offsetX: scrollView.contentOffset.x,
+                    visibleWidth: scrollView.bounds.width,
+                    contentWidth: scrollView.contentSize.width
+                )
+            )
+        }
+
+        func reportScrollMetricsAsync(for scrollView: UIScrollView) {
+            let metrics = TimelineScrollMetrics(
+                offsetX: scrollView.contentOffset.x,
+                visibleWidth: scrollView.bounds.width,
+                contentWidth: scrollView.contentSize.width
+            )
+            DispatchQueue.main.async {
+                self.onScrollMetricsChange(metrics)
+            }
+        }
+
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
             true
         }
+    }
+}
+
+private struct TimelineScrollbarTrack: View {
+    let metrics: TimelineScrollMetrics
+    let width: CGFloat
+    let onScrollRequest: (CGFloat) -> Void
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 14)
+
+            Capsule()
+                .fill(Color.white.opacity(0.82))
+                .frame(width: thumbWidth, height: 6)
+                .offset(x: thumbOffset)
+        }
+        .frame(width: width, height: 14, alignment: .leading)
+        .overlay(
+            Rectangle()
+                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    onScrollRequest(contentOffset(forTrackLocationX: value.location.x))
+                }
+        )
+    }
+
+    private var trackWidth: CGFloat {
+        max(width, 1)
+    }
+
+    private var thumbWidth: CGFloat {
+        guard metrics.contentWidth > 0, metrics.visibleWidth > 0 else { return trackWidth }
+        let ratio = min(max(metrics.visibleWidth / metrics.contentWidth, 0.08), 1)
+        return max(trackWidth * ratio, 24)
+    }
+
+    private var thumbOffset: CGFloat {
+        let maxOffset = max(metrics.contentWidth - metrics.visibleWidth, 0)
+        guard maxOffset > 0 else { return 0 }
+        let progress = min(max(metrics.offsetX / maxOffset, 0), 1)
+        return progress * max(trackWidth - thumbWidth, 0)
+    }
+
+    private func contentOffset(forTrackLocationX locationX: CGFloat) -> CGFloat {
+        let clampedX = min(max(locationX, 0), trackWidth)
+        let maxThumbOffset = max(trackWidth - thumbWidth, 0)
+        guard maxThumbOffset > 0 else { return 0 }
+        let progress = clampedX / maxThumbOffset
+        let maxContentOffset = max(metrics.contentWidth - metrics.visibleWidth, 0)
+        return min(max(progress * maxContentOffset, 0), maxContentOffset)
     }
 }

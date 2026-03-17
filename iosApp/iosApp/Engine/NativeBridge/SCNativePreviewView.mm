@@ -8,7 +8,6 @@
 
 @interface SCNativePreviewView ()
 
-@property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UILabel *metricsLabel;
 @property (nonatomic, strong) UILabel *activeLabel;
 @property (nonatomic, strong) NSMutableArray<UILabel *> *textOverlayLabels;
@@ -40,6 +39,23 @@ static const void *kSCContentBaseSourceTimeKey = &kSCContentBaseSourceTimeKey;
 static const void *kSCContentFrameTimelineTimeKey = &kSCContentFrameTimelineTimeKey;
 static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
 
+static BOOL SCSupportsDirectAVAudioFileRead(NSString *sourcePath) {
+    NSString *ext = sourcePath.pathExtension.lowercaseString;
+    if (ext.length == 0) {
+        return NO;
+    }
+
+    static NSSet<NSString *> *supportedExtensions;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        supportedExtensions = [NSSet setWithArray:@[
+            @"aac", @"aif", @"aiff", @"caf", @"flac", @"m4a", @"mp3", @"wav"
+        ]];
+    });
+
+    return [supportedExtensions containsObject:ext];
+}
+
 static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
     if ([scaleMode isEqualToString:@"fill"]) {
         return kCAGravityResizeAspectFill;
@@ -58,16 +74,6 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
     self = [super initWithFrame:frame];
     if (self) {
         self.backgroundColor = UIColor.blackColor;
-
-        _statusLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-        _statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
-        _statusLabel.textColor = UIColor.whiteColor;
-        _statusLabel.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightSemibold];
-        _statusLabel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.45];
-        _statusLabel.layer.cornerRadius = 8.0;
-        _statusLabel.layer.masksToBounds = YES;
-        _statusLabel.textAlignment = NSTextAlignmentCenter;
-        _statusLabel.text = @"00:00.00";
 
         _metricsLabel = [[UILabel alloc] initWithFrame:CGRectZero];
         _metricsLabel.translatesAutoresizingMaskIntoConstraints = NO;
@@ -109,16 +115,10 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
 
         [self.layer addSublayer:_baseVideoLayer];
 
-        [self addSubview:_statusLabel];
         [self addSubview:_metricsLabel];
         [self addSubview:_activeLabel];
 
         [NSLayoutConstraint activateConstraints:@[
-            [_statusLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-12],
-            [_statusLabel.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-12],
-            [_statusLabel.widthAnchor constraintGreaterThanOrEqualToConstant:82],
-            [_statusLabel.heightAnchor constraintEqualToConstant:30],
-
             [_metricsLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:12],
             [_metricsLabel.topAnchor constraintEqualToAnchor:self.topAnchor constant:12],
             [_metricsLabel.widthAnchor constraintGreaterThanOrEqualToConstant:72],
@@ -290,29 +290,32 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
         CALayer *guideLayer = [CALayer layer];
         guideLayer.bounds = CGRectMake(0, 0, size.width, size.height);
         guideLayer.position = center;
+        BOOL isOverlayGuide = [kind isEqualToString:@"overlay"];
         guideLayer.opacity = MIN(MAX(opacity, 0.25), 1.0);
-        guideLayer.borderWidth = [kind isEqualToString:@"overlay"] ? 2.0 : 1.5;
-        guideLayer.borderColor = [kind isEqualToString:@"overlay"]
+        guideLayer.borderWidth = isOverlayGuide ? 2.0 : 0.0;
+        guideLayer.borderColor = isOverlayGuide
             ? [[UIColor colorWithRed:0.72 green:0.48 blue:0.95 alpha:0.95] CGColor]
-            : [[UIColor colorWithWhite:1.0 alpha:0.75] CGColor];
-        guideLayer.backgroundColor = [kind isEqualToString:@"overlay"]
+            : UIColor.clearColor.CGColor;
+        guideLayer.backgroundColor = isOverlayGuide
             ? [[UIColor colorWithRed:0.72 green:0.48 blue:0.95 alpha:0.10] CGColor]
-            : [[UIColor colorWithWhite:1.0 alpha:0.05] CGColor];
+            : UIColor.clearColor.CGColor;
         guideLayer.cornerRadius = 0.0;
         guideLayer.transform = CATransform3DMakeRotation(rotationRadians, 0, 0, 1);
 
-        CAShapeLayer *crosshair = [CAShapeLayer layer];
-        crosshair.frame = guideLayer.bounds;
-        UIBezierPath *path = [UIBezierPath bezierPath];
-        [path moveToPoint:CGPointMake(CGRectGetMidX(guideLayer.bounds), 0)];
-        [path addLineToPoint:CGPointMake(CGRectGetMidX(guideLayer.bounds), CGRectGetHeight(guideLayer.bounds))];
-        [path moveToPoint:CGPointMake(0, CGRectGetMidY(guideLayer.bounds))];
-        [path addLineToPoint:CGPointMake(CGRectGetWidth(guideLayer.bounds), CGRectGetMidY(guideLayer.bounds))];
-        crosshair.path = path.CGPath;
-        crosshair.strokeColor = [UIColor colorWithWhite:1.0 alpha:0.18].CGColor;
-        crosshair.lineWidth = 1.0;
-        crosshair.lineDashPattern = @[ @4, @4 ];
-        [guideLayer addSublayer:crosshair];
+        if (isOverlayGuide) {
+            CAShapeLayer *crosshair = [CAShapeLayer layer];
+            crosshair.frame = guideLayer.bounds;
+            UIBezierPath *path = [UIBezierPath bezierPath];
+            [path moveToPoint:CGPointMake(CGRectGetMidX(guideLayer.bounds), 0)];
+            [path addLineToPoint:CGPointMake(CGRectGetMidX(guideLayer.bounds), CGRectGetHeight(guideLayer.bounds))];
+            [path moveToPoint:CGPointMake(0, CGRectGetMidY(guideLayer.bounds))];
+            [path addLineToPoint:CGPointMake(CGRectGetWidth(guideLayer.bounds), CGRectGetMidY(guideLayer.bounds))];
+            crosshair.path = path.CGPath;
+            crosshair.strokeColor = [UIColor colorWithWhite:1.0 alpha:0.18].CGColor;
+            crosshair.lineWidth = 1.0;
+            crosshair.lineDashPattern = @[ @4, @4 ];
+            [guideLayer addSublayer:crosshair];
+        }
 
         NSNumber *cropX = overlay[@"cropX"];
         NSNumber *cropY = overlay[@"cropY"];
@@ -341,7 +344,9 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
                     CGRectGetHeight(normalizedCropRect) * CGRectGetHeight(guideLayer.bounds)
                 );
                 cropLayer.path = [UIBezierPath bezierPathWithRect:cropBounds].CGPath;
-                cropLayer.strokeColor = [UIColor colorWithRed:1.0 green:0.92 blue:0.45 alpha:0.95].CGColor;
+                cropLayer.strokeColor = isOverlayGuide
+                    ? [UIColor colorWithRed:1.0 green:0.92 blue:0.45 alpha:0.95].CGColor
+                    : [UIColor colorWithWhite:0.82 alpha:0.85].CGColor;
                 cropLayer.fillColor = UIColor.clearColor.CGColor;
                 cropLayer.lineWidth = 1.5;
                 cropLayer.lineDashPattern = @[ @6, @3 ];
@@ -349,16 +354,18 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
             }
         }
 
-        CATextLayer *opacityLayer = [CATextLayer layer];
-        opacityLayer.contentsScale = UIScreen.mainScreen.scale;
-        opacityLayer.alignmentMode = kCAAlignmentCenter;
-        opacityLayer.foregroundColor = UIColor.whiteColor.CGColor;
-        opacityLayer.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55].CGColor;
-        opacityLayer.fontSize = 10.0;
-        opacityLayer.cornerRadius = 4.0;
-        opacityLayer.frame = CGRectMake(6.0, 6.0, 50.0, 16.0);
-        opacityLayer.string = [NSString stringWithFormat:@"%.0f%%", opacity * 100.0];
-        [guideLayer addSublayer:opacityLayer];
+        if (isOverlayGuide) {
+            CATextLayer *opacityLayer = [CATextLayer layer];
+            opacityLayer.contentsScale = UIScreen.mainScreen.scale;
+            opacityLayer.alignmentMode = kCAAlignmentCenter;
+            opacityLayer.foregroundColor = UIColor.whiteColor.CGColor;
+            opacityLayer.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.55].CGColor;
+            opacityLayer.fontSize = 10.0;
+            opacityLayer.cornerRadius = 4.0;
+            opacityLayer.frame = CGRectMake(6.0, 6.0, 50.0, 16.0);
+            opacityLayer.string = [NSString stringWithFormat:@"%.0f%%", opacity * 100.0];
+            [guideLayer addSublayer:opacityLayer];
+        }
 
         NSString *sourcePath = overlay[@"sourcePath"];
         NSString *scaleMode = overlay[@"scaleMode"];
@@ -383,7 +390,12 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
             [self updateBaseVideoFrameForDisplayTimeSeconds:self.currentTimeSeconds];
             [self prefetchNearbyThumbnailsForSourcePath:sourcePath sourceTimeSeconds:sourceTimeSeconds.doubleValue];
         }
-        if (renderContent && sourcePath.length > 0 && sourceTimeSeconds != nil) {
+        BOOL shouldRenderGuideContent =
+            renderContent &&
+            sourcePath.length > 0 &&
+            sourceTimeSeconds != nil &&
+            ![kind isEqualToString:@"video"];
+        if (shouldRenderGuideContent) {
             CALayer *contentLayer = [CALayer layer];
             contentLayer.frame = guideLayer.bounds;
             contentLayer.contentsGravity = SCContentsGravityForScaleMode(scaleMode);
@@ -498,7 +510,6 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
 
 - (void)refreshOverlayLabels {
     const swiftcut::PreviewFrameState state = _engine.currentState();
-    self.statusLabel.text = [self.class formattedTime:state.currentTimeSeconds];
     self.metricsLabel.text = [NSString stringWithFormat:@"V:%d  A:%d%@", state.visualClipCount, state.audioClipCount, state.playing ? @"  PLAY" : @""];
 
     NSString *summary = state.activeVisualSummary.empty()
@@ -661,7 +672,8 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
             clipId.length == 0 ||
             sourcePath.length == 0 ||
             sourceTimeSeconds == nil ||
-            remainingDurationSeconds == nil
+            remainingDurationSeconds == nil ||
+            !SCSupportsDirectAVAudioFileRead(sourcePath)
         ) {
             continue;
         }
