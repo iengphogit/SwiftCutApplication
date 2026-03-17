@@ -29,6 +29,9 @@ Done:
   - real clip thumbnails for video/overlay clips
   - capsule-bar waveforms for audio clips
   - native snapshot-backed track and clip rows
+  - finger-anchored pinch zoom
+  - playhead-stable button zoom
+  - adaptive ruler tick density by zoom level
 
 Not done yet:
 
@@ -132,13 +135,67 @@ Tasks:
 - playhead tied to playback clock
 - scrolling updates current time
 - current time updates scroll position
-- pinch-to-zoom anchored to the finger center, not the left edge
-- button zoom keeps the playhead time stable
-- ruler tick density adapts to zoom level over time
+- keep pinch-to-zoom anchored to the finger center, not the left edge
+- keep button zoom playhead-time stable
+- keep ruler tick density adaptive to zoom level
 
 Exit criteria:
 
 - timeline feels like one editor surface, not independent scroll rows
+
+## Timeline Terms And Maintenance Rules
+
+Use these terms consistently in code, docs, and reviews:
+
+- `left channel`
+  - fixed track control area
+  - contains track type, mute, lock, remove, and label
+- `right lane`
+  - horizontally scrollable timeline content area
+  - contains ruler, clips, thumbnails, and waveform drawing
+- `playhead`
+  - one fixed vertical line on screen
+  - current time marker for the timeline surface
+- `timeline zero`
+  - the visual x-position where time `0:00` starts
+- `leading timeline inset`
+  - the right-lane inset used so timeline `0:00` aligns to the playhead
+- `zoom anchor`
+  - the timeline time that must remain under the user finger during pinch
+
+These rules are required for maintenance:
+
+- do not let the left channel scroll horizontally
+- do not let the ruler and clip rows use separate horizontal coordinate systems
+- do not let clip width be hand-tuned per clip type
+- do not let the playhead drift from true screen center
+- do not remove `leading timeline inset` math unless the playhead model changes too
+- do not let pinch zoom scale from the left edge; it must stay anchored to the finger
+- do not let scroll/pan updates fight pinch anchoring during zoom
+- do not add fake placeholder clip widths; clip width must come from duration and zoom scale
+- do not let audio, video, overlay, and text use different time-to-width formulas
+
+Current expected behavior:
+
+- left channel is pinned
+- right lane scrolls horizontally
+- ruler and tracks share one time scale
+- clip width is `duration * pointsPerSecond`
+- `pointsPerSecond` is driven by zoom
+- timeline `0:00` aligns to the playhead through `leading timeline inset`
+- pinch zoom keeps the touched timeline point under the finger as closely as possible
+- button zoom changes scale without breaking the shared time model
+- adaptive ruler ticks respond to zoom density
+
+If timeline behavior is changed later, verify these cases manually:
+
+1. open a project and confirm the first clip starts at timeline `0:00`
+2. confirm the playhead remains centered on screen
+3. drag horizontally and confirm the preview seeks with the timeline
+4. pinch on a visible clip thumbnail and confirm the content under the finger stays anchored
+5. zoom far out and confirm ruler labels become less dense
+6. zoom in and confirm ruler labels/ticks become denser
+7. confirm the left channel stays fixed while only the right lane scrolls
 
 ## Phase 6: Audio Engine
 

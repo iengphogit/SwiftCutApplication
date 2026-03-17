@@ -14,6 +14,7 @@ struct TimelineEditorScreen: View {
     @State private var showMediaPicker = false
     @State private var mediaPickerTarget: MediaPickerTarget = .video
     @State private var zoomScale: CGFloat = 1.0
+    @State private var zoomAnchorRequest: TimelineZoomAnchorRequest?
     @State private var isRatioPanelVisible = false
     @State private var isUhdPanelVisible = false
     @State private var selectedRatio: AspectRatio
@@ -277,6 +278,7 @@ struct TimelineEditorScreen: View {
                         zoomScale: zoomScale,
                         pointsPerSecond: 60 * zoomScale,
                         timelineZeroInset: leadingTimelineInset + rightLanePadding,
+                        zoomAnchorRequest: zoomAnchorRequest,
                         onTimeChange: { seconds in
                             viewModel.seek(
                                 to: CMTime(seconds: seconds, preferredTimescale: 600)
@@ -284,6 +286,9 @@ struct TimelineEditorScreen: View {
                         },
                         onZoomChange: { updatedZoomScale in
                             zoomScale = updatedZoomScale
+                        },
+                        onZoomAnchorConsumed: {
+                            zoomAnchorRequest = nil
                         }
                     ) {
                             VStack(spacing: 0) {
@@ -322,7 +327,7 @@ struct TimelineEditorScreen: View {
             Spacer()
             
             HStack(spacing: 12) {
-                Button(action: { zoomScale = max(0.5, zoomScale - 0.25) }) {
+                Button(action: { updateZoomScale(max(0.5, zoomScale - 0.25)) }) {
                     Image(systemName: "minus")
                         .foregroundColor(.gray)
                 }
@@ -332,7 +337,7 @@ struct TimelineEditorScreen: View {
                     .foregroundColor(.gray)
                     .frame(width: 40)
                 
-                Button(action: { zoomScale = min(3.0, zoomScale + 0.25) }) {
+                Button(action: { updateZoomScale(min(3.0, zoomScale + 0.25)) }) {
                     Image(systemName: "plus")
                         .foregroundColor(.gray)
                 }
@@ -537,6 +542,15 @@ struct TimelineEditorScreen: View {
         .zIndex(10)
     }
 
+    private func updateZoomScale(_ newZoomScale: CGFloat) {
+        guard abs(newZoomScale - zoomScale) > 0.001 else { return }
+        zoomAnchorRequest = TimelineZoomAnchorRequest(
+            anchorTime: max(viewModel.currentTime.seconds, 0),
+            locationX: nil
+        )
+        zoomScale = newZoomScale
+    }
+
     private func importDestination(for target: MediaPickerTarget) -> TimelineEditorViewModel.ImportDestination {
         switch target {
         case .video:
@@ -547,6 +561,12 @@ struct TimelineEditorScreen: View {
             return .overlay
         }
     }
+}
+
+private struct TimelineZoomAnchorRequest: Equatable {
+    let id = UUID()
+    let anchorTime: Double
+    let locationX: CGFloat?
 }
 
 private struct NativeEnginePreviewHost: UIViewRepresentable {
@@ -599,8 +619,10 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
     let zoomScale: CGFloat
     let pointsPerSecond: CGFloat
     let timelineZeroInset: CGFloat
+    let zoomAnchorRequest: TimelineZoomAnchorRequest?
     let onTimeChange: (Double) -> Void
     let onZoomChange: (CGFloat) -> Void
+    let onZoomAnchorConsumed: () -> Void
     let content: Content
 
     init(
@@ -608,16 +630,20 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         zoomScale: CGFloat,
         pointsPerSecond: CGFloat,
         timelineZeroInset: CGFloat,
+        zoomAnchorRequest: TimelineZoomAnchorRequest?,
         onTimeChange: @escaping (Double) -> Void,
         onZoomChange: @escaping (CGFloat) -> Void,
+        onZoomAnchorConsumed: @escaping () -> Void,
         @ViewBuilder content: () -> Content
     ) {
         self.currentTime = currentTime
         self.zoomScale = zoomScale
         self.pointsPerSecond = pointsPerSecond
         self.timelineZeroInset = timelineZeroInset
+        self.zoomAnchorRequest = zoomAnchorRequest
         self.onTimeChange = onTimeChange
         self.onZoomChange = onZoomChange
+        self.onZoomAnchorConsumed = onZoomAnchorConsumed
         self.content = content()
     }
 
@@ -628,7 +654,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             pointsPerSecond: pointsPerSecond,
             timelineZeroInset: timelineZeroInset,
             onTimeChange: onTimeChange,
-            onZoomChange: onZoomChange
+            onZoomChange: onZoomChange,
+            onZoomAnchorConsumed: onZoomAnchorConsumed
         )
     }
 
@@ -671,6 +698,16 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         context.coordinator.timelineZeroInset = timelineZeroInset
         context.coordinator.onTimeChange = onTimeChange
         context.coordinator.onZoomChange = onZoomChange
+        context.coordinator.onZoomAnchorConsumed = onZoomAnchorConsumed
+
+        if let zoomAnchorRequest,
+           context.coordinator.lastHandledZoomAnchorId != zoomAnchorRequest.id {
+            context.coordinator.pendingZoomAnchor = (
+                time: zoomAnchorRequest.anchorTime,
+                locationX: zoomAnchorRequest.locationX ?? timelineZeroInset
+            )
+            context.coordinator.lastHandledZoomAnchorId = zoomAnchorRequest.id
+        }
 
         if let pendingAnchor = context.coordinator.pendingZoomAnchor {
             let anchoredOffsetX = max(
@@ -683,6 +720,7 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             context.coordinator.pendingZoomAnchor = nil
             context.coordinator.lastCommittedZoomScale = zoomScale
             onTimeChange(max(Double(anchoredOffsetX / max(pointsPerSecond, 1)), 0))
+            onZoomAnchorConsumed()
             return
         }
 
@@ -705,10 +743,13 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         var timelineZeroInset: CGFloat
         var onTimeChange: (Double) -> Void
         var onZoomChange: (CGFloat) -> Void
+        var onZoomAnchorConsumed: () -> Void
         var isProgrammaticScroll = false
         var isUserInteracting = false
+        var isPinchZooming = false
         var pinchStartZoomScale: CGFloat = 1
         var lastCommittedZoomScale: CGFloat
+        var lastHandledZoomAnchorId: UUID?
         var pendingZoomAnchor: (time: Double, locationX: CGFloat)?
 
         init(
@@ -717,7 +758,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             pointsPerSecond: CGFloat,
             timelineZeroInset: CGFloat,
             onTimeChange: @escaping (Double) -> Void,
-            onZoomChange: @escaping (CGFloat) -> Void
+            onZoomChange: @escaping (CGFloat) -> Void,
+            onZoomAnchorConsumed: @escaping () -> Void
         ) {
             self.hostingController = hostingController
             self.zoomScale = zoomScale
@@ -725,6 +767,7 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             self.timelineZeroInset = timelineZeroInset
             self.onTimeChange = onTimeChange
             self.onZoomChange = onZoomChange
+            self.onZoomAnchorConsumed = onZoomAnchorConsumed
             self.lastCommittedZoomScale = zoomScale
         }
 
@@ -733,7 +776,7 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            guard !isProgrammaticScroll else { return }
+            guard !isProgrammaticScroll, !isPinchZooming else { return }
 
             let seconds = max(scrollView.contentOffset.x / max(pointsPerSecond, 1), 0)
             onTimeChange(seconds)
@@ -755,7 +798,9 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             switch recognizer.state {
             case .began:
                 isUserInteracting = true
+                isPinchZooming = true
                 pinchStartZoomScale = zoomScale
+                scrollView.panGestureRecognizer.isEnabled = false
             case .changed:
                 let clampedZoomScale = min(max(pinchStartZoomScale * recognizer.scale, 0.5), 3.0)
                 guard abs(clampedZoomScale - lastCommittedZoomScale) > 0.01 else { return }
@@ -771,7 +816,11 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
                 lastCommittedZoomScale = clampedZoomScale
                 onZoomChange(clampedZoomScale)
             case .ended, .cancelled, .failed:
+                isPinchZooming = false
                 isUserInteracting = false
+                scrollView.panGestureRecognizer.isEnabled = true
+                let seconds = max(scrollView.contentOffset.x / max(pointsPerSecond, 1), 0)
+                onTimeChange(seconds)
             default:
                 break
             }

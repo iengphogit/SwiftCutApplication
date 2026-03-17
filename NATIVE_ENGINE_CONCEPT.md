@@ -150,6 +150,32 @@ Rules:
 - letterbox or pillarbox when needed
 - do not confuse viewport size with project output size
 
+## Timeline Surface Model
+
+The timeline surface uses one fixed playhead and one shared time scale.
+
+Required UI structure:
+
+- fixed `left channel` for track controls
+- scrollable `right lane` for ruler and clips
+- one centered `playhead`
+- one shared `pointsPerSecond` scale for ruler and clip drawing
+
+Required behavior:
+
+- the left channel must not scroll horizontally
+- the right lane must scroll under the fixed playhead
+- timeline `0:00` must align through a computed leading inset, not by ad hoc offsets
+- clip width must be derived from duration and zoom scale
+- ruler ticks must use the same time scale as clip drawing
+- pinch zoom should preserve the touched timeline point under the finger
+- button zoom should preserve the playhead time
+
+This matters because timeline layout is not cosmetic. It is part of the time
+model. If the left channel, playhead, ruler, or clip drawing use different
+coordinate assumptions, the editor becomes visually incorrect even when the
+engine state is right.
+
 ## iOS Direction
 
 For SwiftCut on iOS, native means:
@@ -233,6 +259,9 @@ Implemented in the current codebase:
   - glass aspect-ratio popup
   - glass resolution/frame-rate/bitrate popup
   - preview-footer undo and redo
+  - finger-anchored pinch zoom on the timeline
+  - playhead-stable button zoom
+  - adaptive ruler tick density based on zoom
   - centered overlay play or pause icon on the preview
 
 Native-first edit paths already in use:
