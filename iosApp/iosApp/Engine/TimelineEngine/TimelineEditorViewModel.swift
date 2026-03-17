@@ -1150,16 +1150,6 @@ private extension TimelineEditorViewModel {
                         timelineRange: timelineRange,
                         linkedClipGroupId: linkedClipGroupId
                     )
-
-                    if hasEmbeddedAudio {
-                        self.fallbackImportClip(
-                            from: project.mediaUrl,
-                            trackType: .audio,
-                            sourceRange: sourceRange,
-                            timelineRange: timelineRange,
-                            linkedClipGroupId: linkedClipGroupId
-                        )
-                    }
                 case .audio:
                     self.fallbackImportClip(
                         from: project.mediaUrl,

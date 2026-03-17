@@ -55,9 +55,8 @@ struct TimelineEditorScreen: View {
                     topTitleSection
                     headerSection
                     previewSection(geometry: geometry)
-                    toolsSection
                     timelineSection
-                    bottomToolsSection
+                    bottomToolStrip
                 }
             }
         }
@@ -325,61 +324,16 @@ struct TimelineEditorScreen: View {
         .background(Color.black)
     }
     
-    private var toolsSection: some View {
-        HStack(spacing: 24) {
-            TimelineToolButton(icon: "scissors", title: "Split") {
-                viewModel.splitAtPlayhead()
-            }
-            .disabled(!viewModel.canSplit)
-            
-            TimelineToolButton(icon: "speedometer", title: "Speed") {
-                
-            }
-            
-            TimelineToolButton(icon: "speaker.wave.2", title: "Volume") {
-                
-            }
-            
-            TimelineToolButton(icon: "crop", title: "Crop") {
-                
-            }
-
-            TimelineToolButton(icon: "waveform.badge.plus", title: "Extract") {
-                if let clipId = selectedClipId {
-                    viewModel.extractAudio(from: clipId)
-                }
-            }
-            .disabled(!canExtractAudioFromSelectedClip)
-            
-            TimelineToolButton(icon: "trash", title: "Delete") {
-                if let clipId = selectedClipId {
-                    viewModel.deleteClip(clipId)
-                    selectedClipId = nil
-                }
-            }
-            .disabled(selectedClipId == nil)
-
-            TimelineToolButton(icon: "arrow.left.arrow.right", title: "Ripple") {
-                if let clipId = selectedClipId {
-                    viewModel.deleteClip(clipId, ripple: true)
-                    selectedClipId = nil
-                }
-            }
-            .disabled(selectedClipId == nil)
-        }
-        .padding(.vertical, 16)
-        .background(Color(white: 0.1))
-    }
-    
     private var timelineSection: some View {
         GeometryReader { geometry in
             let viewportWidth = geometry.size.width
-            let rightLanePadding: CGFloat = 0
+            let channelGap: CGFloat = 8
+            let rightLanePadding: CGFloat = channelGap
             let leftChannelWidth = min(max(162, viewportWidth * 0.36), 192)
             let rightLaneWidth = viewportWidth - leftChannelWidth
-            let playheadXInViewport = viewportWidth / 2
-            let playheadXInRightLane = max(playheadXInViewport - leftChannelWidth, 0)
-            let leadingTimelineInset = max(playheadXInRightLane - rightLanePadding, 0)
+            let playheadXInViewport = leftChannelWidth
+            let playheadXInRightLane: CGFloat = channelGap
+            let leadingTimelineInset: CGFloat = 0
             let realTimelineDuration = max(
                 viewModel.tracks.timelineContentDurationSeconds,
                 max(viewModel.duration.seconds, 0)
@@ -432,26 +386,26 @@ struct TimelineEditorScreen: View {
                             requestedTimelineScrollOffsetX = nil
                         }
                     ) {
-                        HStack(spacing: 0) {
-                            leftTimelineColumn(leftChannelWidth: leftChannelWidth)
-                                .timelineDebugBox(show: showTimelineDebugLayout, fill: .orange, stroke: .orange)
+                        VStack(spacing: 0) {
+                            HStack(spacing: 0) {
+                                leftTrackHeaderColumn(leftChannelWidth: leftChannelWidth)
+                                    .timelineDebugBox(show: showTimelineDebugLayout, fill: .orange, stroke: .orange)
 
-                            VStack(spacing: 0) {
                                 timelineRuler(
                                     timelineWidth: timelineContentWidth,
                                     leadingTimelineInset: leadingTimelineInset,
                                     rightLanePadding: 0
                                 )
                                 .timelineDebugBox(show: showTimelineDebugLayout, fill: .red, stroke: .red)
-                                tracksView(
-                                    timelineWidth: timelineContentWidth,
-                                    leadingTimelineInset: leadingTimelineInset,
-                                    rightLanePadding: 0
-                                )
-                                .timelineDebugBox(show: showTimelineDebugLayout, fill: .green, stroke: .green)
                             }
-                            .frame(width: timelineContentWidth, alignment: .leading)
-                            .timelineDebugBox(show: showTimelineDebugLayout, fill: .blue, stroke: .blue)
+
+                            trackRowsScrollArea(
+                                leftChannelWidth: leftChannelWidth,
+                                timelineWidth: timelineContentWidth,
+                                leadingTimelineInset: leadingTimelineInset,
+                                rightLanePadding: 0
+                            )
+                            .timelineDebugBox(show: showTimelineDebugLayout, fill: .green, stroke: .green)
                         }
                         .frame(width: hostedTimelineWidth, alignment: .leading)
                     }
@@ -485,19 +439,18 @@ struct TimelineEditorScreen: View {
                 .fill(Color.white.opacity(0.04))
                 .frame(width: leftChannelWidth, height: 40)
                 .overlay(
-                    Text("Timeline")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.52))
+                    Text("\(viewModel.currentTimeString) / \(viewModel.durationString)")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.8))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .padding(.horizontal, 8)
                 )
 
             HStack(spacing: 10) {
-                Text("\(viewModel.currentTimeString) / \(viewModel.durationString)")
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.86))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.06))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                Text("Ruler")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.72))
 
                 #if DEBUG
                 Button(action: { showTimelineDebugLayout.toggle() }) {
@@ -536,21 +489,15 @@ struct TimelineEditorScreen: View {
         }
     }
     
-    private func leftTimelineColumn(leftChannelWidth: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            Rectangle()
-                .fill(Color.white.opacity(0.06))
-                .frame(width: leftChannelWidth, height: 24)
-                .overlay(
-                    Text("Tracks")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.6))
-                )
-
-            leftTrackRows(leftChannelWidth: leftChannelWidth)
-            .frame(maxHeight: 200)
-        }
-        .timelineDebugBox(show: showTimelineDebugLayout, fill: .orange, stroke: .orange)
+    private func leftTrackHeaderColumn(leftChannelWidth: CGFloat) -> some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.06))
+            .frame(width: leftChannelWidth, height: 24)
+            .overlay(
+                Text("Tracks")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.6))
+            )
     }
 
     private func timelineRuler(
@@ -597,81 +544,51 @@ struct TimelineEditorScreen: View {
         .padding(.leading, rightLanePadding)
         .frame(width: timelineWidth, height: 24, alignment: .leading)
         .frame(height: 24)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedClipId = nil
+        }
     }
     
-    private func tracksView(
+    private func trackRowsScrollArea(
+        leftChannelWidth: CGFloat,
         timelineWidth: CGFloat,
         leadingTimelineInset: CGFloat,
         rightLanePadding: CGFloat
     ) -> some View {
-        rightTrackRows(
-            timelineWidth: timelineWidth,
-            leadingTimelineInset: leadingTimelineInset,
-            rightLanePadding: rightLanePadding
-        )
-        .frame(maxHeight: 200)
-        .timelineDebugBox(show: showTimelineDebugLayout, fill: .mint, stroke: .mint)
-    }
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(spacing: 8) {
+                ForEach(viewModel.tracks) { track in
+                    HStack(spacing: 0) {
+                        TrackHeaderView(
+                            track: track,
+                            leftChannelWidth: leftChannelWidth,
+                            onToggleMute: {
+                                viewModel.setTrackMuted(track.id, muted: !track.isMuted)
+                            },
+                            onToggleLock: {
+                                viewModel.setTrackLocked(track.id, locked: !track.isLocked)
+                            },
+                            onRemoveTrack: {
+                                viewModel.removeTrack(track.id)
+                            }
+                        )
+                        .timelineDebugBox(show: showTimelineDebugLayout, fill: .yellow, stroke: .yellow)
 
-    @ViewBuilder
-    private func leftTrackRows(leftChannelWidth: CGFloat) -> some View {
-        trackHeaderStack(leftChannelWidth: leftChannelWidth)
-    }
-
-    @ViewBuilder
-    private func rightTrackRows(
-        timelineWidth: CGFloat,
-        leadingTimelineInset: CGFloat,
-        rightLanePadding: CGFloat
-    ) -> some View {
-        trackLaneStack(
-            timelineWidth: timelineWidth,
-            leadingTimelineInset: leadingTimelineInset,
-            rightLanePadding: rightLanePadding
-        )
-    }
-
-    private func trackHeaderStack(leftChannelWidth: CGFloat) -> some View {
-        LazyVStack(spacing: 8) {
-            ForEach(viewModel.tracks) { track in
-                TrackHeaderView(
-                    track: track,
-                    leftChannelWidth: leftChannelWidth,
-                    onToggleMute: {
-                        viewModel.setTrackMuted(track.id, muted: !track.isMuted)
-                    },
-                    onToggleLock: {
-                        viewModel.setTrackLocked(track.id, locked: !track.isLocked)
-                    },
-                    onRemoveTrack: {
-                        viewModel.removeTrack(track.id)
+                        trackLaneRow(
+                            track: track,
+                            timelineWidth: timelineWidth,
+                            leadingTimelineInset: leadingTimelineInset,
+                            rightLanePadding: rightLanePadding
+                        )
+                        .timelineDebugBox(show: showTimelineDebugLayout, fill: .mint, stroke: .mint)
                     }
-                )
+                }
             }
+            .padding(.top, 0)
+            .padding(.bottom, 8)
         }
-        .padding(.top, 0)
-        .padding(.bottom, 8)
-        .timelineDebugBox(show: showTimelineDebugLayout, fill: .yellow, stroke: .yellow)
-    }
-
-    private func trackLaneStack(
-        timelineWidth: CGFloat,
-        leadingTimelineInset: CGFloat,
-        rightLanePadding: CGFloat
-    ) -> some View {
-        LazyVStack(spacing: 8) {
-            ForEach(viewModel.tracks) { track in
-                trackLaneRow(
-                    track: track,
-                    timelineWidth: timelineWidth,
-                    leadingTimelineInset: leadingTimelineInset,
-                    rightLanePadding: rightLanePadding
-                )
-            }
-        }
-        .padding(.top, 0)
-        .padding(.bottom, 8)
-        .timelineDebugBox(show: showTimelineDebugLayout, fill: .green, stroke: .green)
+        .frame(height: 200)
     }
 
     private func trackLaneRow(
@@ -689,6 +606,9 @@ struct TimelineEditorScreen: View {
             selectedClipId: $selectedClipId,
             onClipTap: { clipId in
                 selectedClipId = selectedClipId == clipId ? nil : clipId
+            },
+            onBackgroundTap: {
+                selectedClipId = nil
             },
             onClipMove: { clipId, newStartSeconds in
                 viewModel.moveClip(
@@ -764,32 +684,128 @@ struct TimelineEditorScreen: View {
         .allowsHitTesting(false)
     }
     
-    private var bottomToolsSection: some View {
+    private var bottomToolStrip: some View {
         HStack(spacing: 0) {
-            TimelineBottomToolButton(icon: "plus", title: "Add") {
-                showVideoImportOptions = true
+            if let leadingToolStripItem {
+                TimelineBottomToolButton(
+                    icon: leadingToolStripItem.icon,
+                    title: leadingToolStripItem.title,
+                    action: leadingToolStripItem.action
+                )
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(width: 1, height: 34)
+                    .padding(.vertical, 6)
             }
-            
-            TimelineBottomToolButton(icon: "textformat", title: "Text") {
-            }
-            .disabled(true)
-            
-            TimelineBottomToolButton(icon: "music.note", title: "Audio") {
-                mediaPickerTarget = .audio
-                showMediaPicker = true
-            }
-            
-            TimelineBottomToolButton(icon: "photo", title: "Overlay") {
-                mediaPickerTarget = .overlay
-                showMediaPicker = true
-            }
-            
-            TimelineBottomToolButton(icon: "sparkles", title: "Effects") {
-                
+
+            ForEach(activeToolStripItems) { item in
+                TimelineBottomToolButton(icon: item.icon, title: item.title, action: item.action)
             }
         }
         .padding(.vertical, 8)
         .background(Color(white: 0.1))
+    }
+
+    private var selectedClip: ClipDisplayModel? {
+        guard let selectedClipId else { return nil }
+        return viewModel.tracks
+            .flatMap(\.clips)
+            .first(where: { $0.id == selectedClipId })
+    }
+
+    private var contextualToolItems: [BottomBarItem] {
+        guard let selectedClip else { return [] }
+
+        var items: [BottomBarItem] = [
+            BottomBarItem(id: "split", icon: "scissors", title: "Split") {
+                viewModel.splitAtPlayhead()
+            }
+        ]
+
+        switch selectedClip.type {
+        case .video:
+            items.append(
+                BottomBarItem(id: "volume", icon: "speaker.wave.2", title: "Volume") {}
+            )
+            items.append(
+                BottomBarItem(id: "crop", icon: "crop", title: "Crop") {}
+            )
+            if canExtractAudioFromSelectedClip {
+                items.append(
+                    BottomBarItem(id: "extract", icon: "waveform.badge.plus", title: "Extract") {
+                        if let selectedClipId {
+                            viewModel.extractAudio(from: selectedClipId)
+                        }
+                    }
+                )
+            }
+        case .audio:
+            items.append(
+                BottomBarItem(id: "volume", icon: "speaker.wave.2", title: "Volume") {}
+            )
+        case .text:
+            items.append(
+                BottomBarItem(id: "style", icon: "paintbrush", title: "Style") {}
+            )
+        case .overlay:
+            items.append(
+                BottomBarItem(id: "crop", icon: "crop", title: "Crop") {}
+            )
+        case .effect:
+            break
+        }
+
+        items.append(
+            BottomBarItem(id: "delete", icon: "trash", title: "Delete") {
+                if let selectedClipId {
+                    viewModel.deleteClip(selectedClipId)
+                    self.selectedClipId = nil
+                }
+            }
+        )
+        items.append(
+            BottomBarItem(id: "ripple", icon: "arrow.left.arrow.right", title: "Ripple") {
+                if let selectedClipId {
+                    viewModel.deleteClip(selectedClipId, ripple: true)
+                    self.selectedClipId = nil
+                }
+            }
+        )
+
+        return items
+    }
+
+    private var leadingToolStripItem: BottomBarItem? {
+        if selectedClip != nil {
+            return BottomBarItem(id: "back-to-main", icon: "chevron.left", title: "Back") {
+                selectedClipId = nil
+            }
+        }
+
+        return nil
+    }
+
+    private var activeToolStripItems: [BottomBarItem] {
+        selectedClip != nil ? contextualToolItems : mainToolStripItems
+    }
+
+    private var mainToolStripItems: [BottomBarItem] {
+        [
+            BottomBarItem(id: "track", icon: "plus", title: "Track") {
+                showVideoImportOptions = true
+            },
+            BottomBarItem(id: "text", icon: "textformat", title: "Text") {},
+            BottomBarItem(id: "audio", icon: "music.note", title: "Audio") {
+                mediaPickerTarget = .audio
+                showMediaPicker = true
+            },
+            BottomBarItem(id: "overlay", icon: "photo", title: "Overlay") {
+                mediaPickerTarget = .overlay
+                showMediaPicker = true
+            },
+            BottomBarItem(id: "effects", icon: "sparkles", title: "Effects") {}
+        ]
     }
     
     private func formatSecond(_ second: Int) -> String {
@@ -939,6 +955,13 @@ private struct TimelineScrollMetrics: Equatable {
     var offsetX: CGFloat = 0
     var visibleWidth: CGFloat = 0
     var contentWidth: CGFloat = 0
+}
+
+private struct BottomBarItem: Identifiable {
+    let id: String
+    let icon: String
+    let title: String
+    let action: () -> Void
 }
 
 private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable {

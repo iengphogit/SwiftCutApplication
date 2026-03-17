@@ -250,6 +250,7 @@ struct TrackLaneView: View {
     let zoomScale: CGFloat
     @Binding var selectedClipId: UUID?
     let onClipTap: (UUID) -> Void
+    let onBackgroundTap: () -> Void
     let onClipMove: (UUID, Double) -> Void
     let onClipTrimLeading: (UUID, Double, Double, Double) -> Void
     let onClipTrimTrailing: (UUID, Double, Double) -> Void
@@ -303,6 +304,10 @@ struct TrackLaneView: View {
             Rectangle()
                 .fill(Color(white: 0.11))
         )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onBackgroundTap()
+        }
         .overlay(
             Rectangle()
                 .stroke(Color.white.opacity(0.05), lineWidth: 1)
@@ -512,23 +517,16 @@ struct TrackHeaderView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 8) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(trackColor(track.type).opacity(0.18))
-                        .frame(width: 24, height: 24)
+            ZStack {
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(trackColor(track.type).opacity(0.18))
+                    .frame(width: 24, height: 24)
 
-                    Image(systemName: iconForType(track.type))
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(trackColor(track.type))
-                }
-
-                Text(trackShortName)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.82))
-                    .lineLimit(1)
+                Image(systemName: iconForType(track.type))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(trackColor(track.type))
             }
-            .frame(minWidth: 42)
+            .frame(width: 24)
 
             HStack(spacing: 10) {
                 channelButton(
@@ -562,7 +560,7 @@ struct TrackHeaderView: View {
             Rectangle()
                 .stroke(trackColor(track.type).opacity(0.32), lineWidth: 1)
         )
-        .frame(width: leftChannelWidth, height: laneHeight, alignment: .trailing)
+        .frame(width: leftChannelWidth, height: laneHeight)
     }
 
     private func channelButton(systemName: String, tint: Color, action: @escaping () -> Void) -> some View {
@@ -609,7 +607,7 @@ struct TrackHeaderView: View {
     }
 
     private var canRemoveTrack: Bool {
-        track.type != .video
+        track.type != .video && track.type != .audio
     }
 
     private var laneHeight: CGFloat {
@@ -648,7 +646,7 @@ private struct ClipView: View {
         .clipShape(Rectangle())
         .overlay(
             Rectangle()
-                .stroke(isSelected ? Color.white : Color.clear, lineWidth: 2)
+                .stroke(isSelected ? Color.orange.opacity(0.85) : Color.clear, lineWidth: 2)
         )
         .task(id: "\(clip.type)-\(clip.sourcePath)") {
             guard clip.type == .video, expandsVideoAudio else {
@@ -823,24 +821,29 @@ struct AudioWaveformStrip: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let targetBarCount = max(Int(geometry.size.width / 6), 18)
             let visibleSamples = samples.isEmpty
-                ? Array(repeating: CGFloat(0.35), count: 24)
+                ? Array(repeating: CGFloat(0.35), count: targetBarCount)
                 : samples
+            let barWidth = max((geometry.size.width / CGFloat(max(visibleSamples.count, 1))) - 1.5, 2)
 
-            HStack(alignment: .center, spacing: 2) {
+            HStack(alignment: .center, spacing: 1.5) {
                 ForEach(Array(visibleSamples.enumerated()), id: \.offset) { _, sample in
                     Capsule()
                         .fill(Color.white.opacity(0.88))
                         .frame(
-                            width: max((geometry.size.width / CGFloat(visibleSamples.count)) - 2, 2),
-                            height: max(4, geometry.size.height * sample)
+                            width: barWidth,
+                            height: max(4, geometry.size.height * max(sample, 0.14))
                         )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        }
-        .task(id: sourcePath) {
-            samples = await TimelineClipVisualCache.waveform(for: sourcePath)
+            .task(id: "\(sourcePath)-\(targetBarCount)") {
+                samples = await TimelineClipVisualCache.waveform(
+                    for: sourcePath,
+                    targetBarCount: targetBarCount
+                )
+            }
         }
     }
 }
@@ -924,16 +927,21 @@ private enum TimelineClipVisualCache {
         }.value
     }
 
-    static func waveform(for sourcePath: String) async -> [CGFloat] {
+    static func waveform(for sourcePath: String, targetBarCount: Int) async -> [CGFloat] {
         guard !sourcePath.isEmpty else { return [] }
+        let resolvedBarCount = max(targetBarCount, 1)
+        let cacheKey = "\(sourcePath)#waveform#\(resolvedBarCount)" as NSString
 
-        if let cached = waveformCache.object(forKey: sourcePath as NSString) as? [NSNumber] {
+        if let cached = waveformCache.object(forKey: cacheKey) as? [NSNumber] {
             return cached.map { CGFloat(truncating: $0) }
         }
 
         return await Task<[CGFloat], Never>.detached(priority: .utility) {
-            let values = generateWaveformSamples(sourcePath: sourcePath)
-            waveformCache.setObject(values.map(NSNumber.init(value:)) as NSArray, forKey: sourcePath as NSString)
+            let values = generateWaveformSamples(
+                sourcePath: sourcePath,
+                targetBarCount: resolvedBarCount
+            )
+            waveformCache.setObject(values.map(NSNumber.init(value:)) as NSArray, forKey: cacheKey)
             return values.map { CGFloat($0) }
         }.value
     }
@@ -953,7 +961,7 @@ private enum TimelineClipVisualCache {
         }.value
     }
 
-    private static func generateWaveformSamples(sourcePath: String) -> [Double] {
+    private static func generateWaveformSamples(sourcePath: String, targetBarCount: Int) -> [Double] {
         let url = URL(fileURLWithPath: sourcePath)
         let asset = AVURLAsset(url: url)
         guard let track = asset.tracks(withMediaType: .audio).first,
@@ -982,7 +990,6 @@ private enum TimelineClipVisualCache {
         }
 
         var amplitudes: [Double] = []
-        let targetBarCount = 28
         let sampleStride = 1024
 
         while let sampleBuffer = output.copyNextSampleBuffer(),
@@ -1027,8 +1034,10 @@ private enum TimelineClipVisualCache {
         while bucketIndex < amplitudes.count {
             let end = min(bucketIndex + bucketSize, amplitudes.count)
             let bucket = amplitudes[bucketIndex..<end]
+            let peak = bucket.max() ?? 0
             let average = bucket.reduce(0, +) / Double(bucket.count)
-            buckets.append(max(0.16, min(average * 1.6, 1.0)))
+            let shapedValue = max(average * 0.85, peak * 0.55)
+            buckets.append(max(0.14, min(pow(shapedValue, 0.8) * 1.35, 1.0)))
             bucketIndex = end
         }
 
