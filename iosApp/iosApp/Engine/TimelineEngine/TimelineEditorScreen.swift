@@ -352,7 +352,12 @@ struct TimelineEditorScreen: View {
                         pointsPerSecond: 60 * zoomScale,
                         timelineZeroInset: leadingTimelineInset + rightLanePadding,
                         zoomAnchorRequest: zoomAnchorRequest,
-                        onTimeChange: { seconds in
+                        onTimePreviewChange: { seconds in
+                            viewModel.previewScrub(
+                                to: CMTime(seconds: seconds, preferredTimescale: 600)
+                            )
+                        },
+                        onTimeCommit: { seconds in
                             viewModel.seek(
                                 to: CMTime(seconds: seconds, preferredTimescale: 600)
                             )
@@ -675,7 +680,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
     let pointsPerSecond: CGFloat
     let timelineZeroInset: CGFloat
     let zoomAnchorRequest: TimelineZoomAnchorRequest?
-    let onTimeChange: (Double) -> Void
+    let onTimePreviewChange: (Double) -> Void
+    let onTimeCommit: (Double) -> Void
     let onZoomChange: (CGFloat) -> Void
     let onZoomAnchorConsumed: () -> Void
     let content: Content
@@ -686,7 +692,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         pointsPerSecond: CGFloat,
         timelineZeroInset: CGFloat,
         zoomAnchorRequest: TimelineZoomAnchorRequest?,
-        onTimeChange: @escaping (Double) -> Void,
+        onTimePreviewChange: @escaping (Double) -> Void,
+        onTimeCommit: @escaping (Double) -> Void,
         onZoomChange: @escaping (CGFloat) -> Void,
         onZoomAnchorConsumed: @escaping () -> Void,
         @ViewBuilder content: () -> Content
@@ -696,7 +703,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         self.pointsPerSecond = pointsPerSecond
         self.timelineZeroInset = timelineZeroInset
         self.zoomAnchorRequest = zoomAnchorRequest
-        self.onTimeChange = onTimeChange
+        self.onTimePreviewChange = onTimePreviewChange
+        self.onTimeCommit = onTimeCommit
         self.onZoomChange = onZoomChange
         self.onZoomAnchorConsumed = onZoomAnchorConsumed
         self.content = content()
@@ -708,7 +716,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             zoomScale: zoomScale,
             pointsPerSecond: pointsPerSecond,
             timelineZeroInset: timelineZeroInset,
-            onTimeChange: onTimeChange,
+            onTimePreviewChange: onTimePreviewChange,
+            onTimeCommit: onTimeCommit,
             onZoomChange: onZoomChange,
             onZoomAnchorConsumed: onZoomAnchorConsumed
         )
@@ -751,7 +760,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         context.coordinator.zoomScale = zoomScale
         context.coordinator.pointsPerSecond = pointsPerSecond
         context.coordinator.timelineZeroInset = timelineZeroInset
-        context.coordinator.onTimeChange = onTimeChange
+        context.coordinator.onTimePreviewChange = onTimePreviewChange
+        context.coordinator.onTimeCommit = onTimeCommit
         context.coordinator.onZoomChange = onZoomChange
         context.coordinator.onZoomAnchorConsumed = onZoomAnchorConsumed
 
@@ -776,7 +786,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             context.coordinator.lastCommittedZoomScale = zoomScale
             let anchoredSeconds = max(Double(anchoredOffsetX / max(pointsPerSecond, 1)), 0)
             DispatchQueue.main.async {
-                onTimeChange(anchoredSeconds)
+                onTimePreviewChange(anchoredSeconds)
+                onTimeCommit(anchoredSeconds)
                 onZoomAnchorConsumed()
             }
             return
@@ -799,7 +810,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
         var zoomScale: CGFloat
         var pointsPerSecond: CGFloat
         var timelineZeroInset: CGFloat
-        var onTimeChange: (Double) -> Void
+        var onTimePreviewChange: (Double) -> Void
+        var onTimeCommit: (Double) -> Void
         var onZoomChange: (CGFloat) -> Void
         var onZoomAnchorConsumed: () -> Void
         var isProgrammaticScroll = false
@@ -815,7 +827,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             zoomScale: CGFloat,
             pointsPerSecond: CGFloat,
             timelineZeroInset: CGFloat,
-            onTimeChange: @escaping (Double) -> Void,
+            onTimePreviewChange: @escaping (Double) -> Void,
+            onTimeCommit: @escaping (Double) -> Void,
             onZoomChange: @escaping (CGFloat) -> Void,
             onZoomAnchorConsumed: @escaping () -> Void
         ) {
@@ -823,7 +836,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             self.zoomScale = zoomScale
             self.pointsPerSecond = pointsPerSecond
             self.timelineZeroInset = timelineZeroInset
-            self.onTimeChange = onTimeChange
+            self.onTimePreviewChange = onTimePreviewChange
+            self.onTimeCommit = onTimeCommit
             self.onZoomChange = onZoomChange
             self.onZoomAnchorConsumed = onZoomAnchorConsumed
             self.lastCommittedZoomScale = zoomScale
@@ -837,16 +851,20 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
             guard !isProgrammaticScroll, !isPinchZooming else { return }
 
             let seconds = max(scrollView.contentOffset.x / max(pointsPerSecond, 1), 0)
-            onTimeChange(seconds)
+            onTimePreviewChange(seconds)
         }
 
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            let seconds = max(scrollView.contentOffset.x / max(pointsPerSecond, 1), 0)
+            onTimeCommit(seconds)
             if !decelerate {
                 isUserInteracting = false
             }
         }
 
         func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            let seconds = max(scrollView.contentOffset.x / max(pointsPerSecond, 1), 0)
+            onTimeCommit(seconds)
             isUserInteracting = false
         }
 
@@ -878,7 +896,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
                 isUserInteracting = false
                 scrollView.panGestureRecognizer.isEnabled = true
                 let seconds = max(scrollView.contentOffset.x / max(pointsPerSecond, 1), 0)
-                onTimeChange(seconds)
+                onTimePreviewChange(seconds)
+                onTimeCommit(seconds)
             default:
                 break
             }

@@ -489,6 +489,12 @@ class TimelineEditorViewModel: ObservableObject {
         previewSeekCommand = PreviewSeekCommand(timeSeconds: max(time.seconds, 0))
     }
 
+    func previewScrub(to time: CMTime) {
+        let clampedTime = CMTime(seconds: max(time.seconds, 0), preferredTimescale: 600)
+        currentTime = clampedTime
+        refreshCompositionFrame(at: clampedTime)
+    }
+
     func syncPreviewDisplayTime(_ seconds: Double) {
         let time = CMTime(seconds: max(seconds, 0), preferredTimescale: 600)
         nativeEditorEngine.seek(to: time)

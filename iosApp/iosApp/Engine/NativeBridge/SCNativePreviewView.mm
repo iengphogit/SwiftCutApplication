@@ -24,6 +24,8 @@
 @property (nonatomic, assign) double currentTimeSeconds;
 @property (nonatomic, assign) BOOL desiredPlaying;
 @property (nonatomic, assign) CFTimeInterval lastDisplayLinkTimestamp;
+@property (nonatomic, assign) BOOL hasReportedPlaybackState;
+@property (nonatomic, assign) BOOL lastReportedPlaybackState;
 
 @end
 
@@ -37,6 +39,16 @@ static const void *kSCContentSourcePathKey = &kSCContentSourcePathKey;
 static const void *kSCContentBaseSourceTimeKey = &kSCContentBaseSourceTimeKey;
 static const void *kSCContentFrameTimelineTimeKey = &kSCContentFrameTimelineTimeKey;
 static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
+
+static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
+    if ([scaleMode isEqualToString:@"fill"]) {
+        return kCAGravityResizeAspectFill;
+    }
+    if ([scaleMode isEqualToString:@"stretch"]) {
+        return kCAGravityResize;
+    }
+    return kCAGravityResizeAspect;
+}
 
 + (Class)layerClass {
     return [CALayer class];
@@ -92,6 +104,8 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
         _currentTimeSeconds = 0.0;
         _desiredPlaying = NO;
         _lastDisplayLinkTimestamp = 0.0;
+        _hasReportedPlaybackState = NO;
+        _lastReportedPlaybackState = NO;
 
         [self.layer addSublayer:_baseVideoLayer];
 
@@ -144,6 +158,8 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
     } else if (self.activeAudioClips.count > 0) {
         [self synchronizeAudioTransport];
     }
+
+    [self notifyPlaybackStateIfNeeded];
 }
 
 - (void)seekToTimeSeconds:(double)seconds {
@@ -345,6 +361,7 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
         [guideLayer addSublayer:opacityLayer];
 
         NSString *sourcePath = overlay[@"sourcePath"];
+        NSString *scaleMode = overlay[@"scaleMode"];
         BOOL renderContent = [overlay[@"renderContent"] boolValue];
         NSNumber *sourceTimeSeconds = overlay[@"sourceTimeSeconds"];
         NSNumber *frameTimelineTimeSeconds = overlay[@"frameTimelineTimeSeconds"];
@@ -369,7 +386,7 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
         if (renderContent && sourcePath.length > 0 && sourceTimeSeconds != nil) {
             CALayer *contentLayer = [CALayer layer];
             contentLayer.frame = guideLayer.bounds;
-            contentLayer.contentsGravity = kCAGravityResizeAspectFill;
+            contentLayer.contentsGravity = SCContentsGravityForScaleMode(scaleMode);
             contentLayer.masksToBounds = YES;
             contentLayer.name = @"visual-content";
             if (!CGRectIsNull(normalizedCropRect)) {
@@ -474,14 +491,7 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
             }
         });
     }
-    if (self.onPlaybackStateChange != nil) {
-        BOOL desiredPlaying = self.desiredPlaying;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (self.onPlaybackStateChange != nil) {
-                self.onPlaybackStateChange(desiredPlaying);
-            }
-        });
-    }
+    [self notifyPlaybackStateIfNeeded];
 
     [self refreshOverlayLabels];
 }
@@ -495,6 +505,26 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
         ? @"No active layer"
         : [NSString stringWithUTF8String:state.activeVisualSummary.c_str()];
     self.activeLabel.text = [NSString stringWithFormat:@"%@", summary];
+}
+
+- (void)notifyPlaybackStateIfNeeded {
+    if (self.hasReportedPlaybackState && self.lastReportedPlaybackState == self.desiredPlaying) {
+        return;
+    }
+
+    self.hasReportedPlaybackState = YES;
+    self.lastReportedPlaybackState = self.desiredPlaying;
+
+    if (self.onPlaybackStateChange == nil) {
+        return;
+    }
+
+    BOOL desiredPlaying = self.desiredPlaying;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.onPlaybackStateChange != nil) {
+            self.onPlaybackStateChange(desiredPlaying);
+        }
+    });
 }
 
 
@@ -615,7 +645,9 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
         return;
     }
 
-    [self ensureAudioEngineStarted];
+    if (![self ensureAudioEngineStarted]) {
+        return;
+    }
 
     for (NSDictionary *clip in self.activeAudioClips) {
         NSString *clipId = clip[@"clipId"];
@@ -672,17 +704,44 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
     }
 }
 
-- (void)ensureAudioEngineStarted {
+- (BOOL)configureAudioSession {
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    NSError *error = nil;
+    if (![session setCategory:AVAudioSessionCategoryPlayback
+                  withOptions:AVAudioSessionCategoryOptionMixWithOthers
+                        error:&error]) {
+        return NO;
+    }
+
+    error = nil;
+    if (![session setActive:YES error:&error]) {
+        return NO;
+    }
+
+    return session.currentRoute.outputs.count > 0;
+}
+
+- (BOOL)ensureAudioEngineStarted {
     if (self.audioEngine == nil) {
         self.audioEngine = [[AVAudioEngine alloc] init];
     }
 
     if (self.audioEngine.isRunning) {
-        return;
+        return YES;
+    }
+
+    if (![self configureAudioSession]) {
+        return NO;
     }
 
     NSError *error = nil;
-    [self.audioEngine startAndReturnError:&error];
+    @try {
+        (void)self.audioEngine.outputNode;
+        [self.audioEngine startAndReturnError:&error];
+    } @catch (NSException *exception) {
+        return NO;
+    }
+    return error == nil && self.audioEngine.isRunning;
 }
 
 - (void)stopAndResetAudioNodes {
@@ -709,7 +768,9 @@ static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
 }
 
 - (void)playAudioNodes {
-    [self ensureAudioEngineStarted];
+    if (![self ensureAudioEngineStarted]) {
+        return;
+    }
     for (AVAudioPlayerNode *node in self.audioNodes.objectEnumerator) {
         if (!node.isPlaying) {
             [node play];
