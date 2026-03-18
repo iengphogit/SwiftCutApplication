@@ -49,6 +49,10 @@ Use this section as the quick resume point before reading the detailed phases be
 - [ ] Log and inspect whether active audio clips are reaching `SCAudioTransportEngine`
 - [ ] Add track volume/solo controls to UI once native bridge path is verified
 - [ ] Add clip volume/mute controls to contextual tools
+- [ ] Add audio `Volume` contextual sub-mode: `Back | volume slider | percent`
+- [ ] Route audio clip volume slider updates into `NativeAudioEngine`
+- [ ] Persist clip volume through native snapshot rebuilds and timeline reloads
+- [ ] Verify live volume changes stay smooth during playback and scrubbing
 - [ ] Verify extracted audio clip timing/length matches the source video clip exactly after a fresh extract
 - [ ] Reintroduce coordinated vertical scrolling for many tracks only after audio playback is stable
 
@@ -89,6 +93,7 @@ Use this section as the quick resume point before reading the detailed phases be
 - The export frame stays centered and changes by fit geometry, not by padding/margin layout tricks
 - Timeline horizontal scrub is smoother because drag updates no longer commit a native seek on every scroll tick
 - The bottom tool strip now switches between a default tool set and clip-specific contextual tools
+- The next contextual-tool happy-flow target is an audio `Volume` sub-mode with a focused slider UI
 
 ### Blockers To Clear First
 - [x] Prove `Play -> Playing -> Pause -> Paused` works after opening a real project
@@ -100,6 +105,7 @@ Use this section as the quick resume point before reading the detailed phases be
 - [x] Remove UI test ambiguity around the nested playback button accessibility tree
 - [x] Add one stable playback smoke test that passes on simulator
 - [ ] Run one manual simulator/device verification pass for the same flow
+- [ ] Prove selected audio clip volume can be adjusted from a focused slider sub-mode without breaking playback smoothness
 - [ ] Wire export bitrate to real encoder/output configuration
 - [ ] Only after the above: mark the happy flow as signed off
 
