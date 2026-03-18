@@ -58,6 +58,17 @@ struct TimelineEditorScreen: View {
                     timelineSection
                     bottomToolStrip
                 }
+
+                if let toast = viewModel.toast {
+                    VStack {
+                        Spacer()
+                        timelineToastView(toast)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 86)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    .allowsHitTesting(false)
+                }
             }
         }
         .sheet(isPresented: $showMediaPicker) {
@@ -98,6 +109,15 @@ struct TimelineEditorScreen: View {
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .accessibilityIdentifier("timeline-editor-screen")
+        .animation(.easeInOut(duration: 0.2), value: viewModel.toast)
+        .onChange(of: viewModel.toast) { _, toast in
+            guard toast != nil else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
+                if viewModel.toast == toast {
+                    viewModel.toast = nil
+                }
+            }
+        }
     }
 
     private var topTitleSection: some View {
@@ -215,6 +235,24 @@ struct TimelineEditorScreen: View {
                         .clipShape(Capsule())
                 }
             }
+
+            #if DEBUG
+            Menu {
+                Button("Debug Off") {
+                    showTimelineDebugLayout = false
+                }
+                Button("Debug On") {
+                    showTimelineDebugLayout = true
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.9))
+                    .frame(width: 36, height: 36)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Circle())
+            }
+            #endif
         }
     }
     
@@ -331,9 +369,9 @@ struct TimelineEditorScreen: View {
             let rightLanePadding: CGFloat = channelGap
             let leftChannelWidth = min(max(162, viewportWidth * 0.36), 192)
             let rightLaneWidth = viewportWidth - leftChannelWidth
-            let playheadXInViewport = leftChannelWidth
-            let playheadXInRightLane: CGFloat = channelGap
-            let leadingTimelineInset: CGFloat = 0
+            let playheadXInViewport = viewportWidth / 2
+            let playheadXInRightLane = max(playheadXInViewport - leftChannelWidth, channelGap)
+            let leadingTimelineInset = max(playheadXInRightLane - rightLanePadding, 0)
             let realTimelineDuration = max(
                 viewModel.tracks.timelineContentDurationSeconds,
                 max(viewModel.duration.seconds, 0)
@@ -452,18 +490,6 @@ struct TimelineEditorScreen: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.white.opacity(0.72))
 
-                #if DEBUG
-                Button(action: { showTimelineDebugLayout.toggle() }) {
-                    Text(showTimelineDebugLayout ? "Debug On" : "Debug Off")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(showTimelineDebugLayout ? .black : .white.opacity(0.82))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(showTimelineDebugLayout ? Color.yellow : Color.white.opacity(0.08))
-                        .clipShape(Capsule())
-                }
-                #endif
-
                 Spacer(minLength: 0)
 
                 HStack(spacing: 12) {
@@ -486,6 +512,27 @@ struct TimelineEditorScreen: View {
             .padding(.horizontal, 12)
             .frame(width: rightLaneWidth, height: 40)
             .background(Color.white.opacity(0.03))
+        }
+    }
+
+    private func timelineToastView(_ toast: TimelineToast) -> some View {
+        Text(toast.message)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(toastBackgroundColor(toast.style))
+            .clipShape(Capsule())
+    }
+
+    private func toastBackgroundColor(_ style: TimelineToast.Style) -> Color {
+        switch style {
+        case .success:
+            return Color.green.opacity(0.92)
+        case .error:
+            return Color.orange.opacity(0.92)
+        case .info:
+            return Color.white.opacity(0.16)
         }
     }
     
@@ -690,6 +737,8 @@ struct TimelineEditorScreen: View {
                 TimelineBottomToolButton(
                     icon: leadingToolStripItem.icon,
                     title: leadingToolStripItem.title,
+                    isLoading: leadingToolStripItem.isLoading,
+                    isEnabled: leadingToolStripItem.isEnabled,
                     action: leadingToolStripItem.action
                 )
 
@@ -700,7 +749,13 @@ struct TimelineEditorScreen: View {
             }
 
             ForEach(activeToolStripItems) { item in
-                TimelineBottomToolButton(icon: item.icon, title: item.title, action: item.action)
+                TimelineBottomToolButton(
+                    icon: item.icon,
+                    title: item.title,
+                    isLoading: item.isLoading,
+                    isEnabled: item.isEnabled,
+                    action: item.action
+                )
             }
         }
         .padding(.vertical, 8)
@@ -733,7 +788,13 @@ struct TimelineEditorScreen: View {
             )
             if canExtractAudioFromSelectedClip {
                 items.append(
-                    BottomBarItem(id: "extract", icon: "waveform.badge.plus", title: "Extract") {
+                    BottomBarItem(
+                        id: "extract",
+                        icon: "waveform.badge.plus",
+                        title: viewModel.isExtractingAudio ? "Extracting..." : "Extract",
+                        isLoading: viewModel.isExtractingAudio,
+                        isEnabled: !viewModel.isExtractingAudio
+                    ) {
                         if let selectedClipId {
                             viewModel.extractAudio(from: selectedClipId)
                         }
@@ -961,7 +1022,25 @@ private struct BottomBarItem: Identifiable {
     let id: String
     let icon: String
     let title: String
+    let isLoading: Bool
+    let isEnabled: Bool
     let action: () -> Void
+
+    init(
+        id: String,
+        icon: String,
+        title: String,
+        isLoading: Bool = false,
+        isEnabled: Bool = true,
+        action: @escaping () -> Void
+    ) {
+        self.id = id
+        self.icon = icon
+        self.title = title
+        self.isLoading = isLoading
+        self.isEnabled = isEnabled
+        self.action = action
+    }
 }
 
 private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable {

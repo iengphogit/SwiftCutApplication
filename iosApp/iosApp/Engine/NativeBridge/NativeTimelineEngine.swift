@@ -16,6 +16,8 @@ struct NativeTrackSnapshot: Identifiable {
     let type: String
     let layer: Int
     let muted: Bool
+    let volume: Float
+    let solo: Bool
     let locked: Bool
     let clips: [NativeClipSnapshot]
 }
@@ -28,6 +30,8 @@ struct NativeClipSnapshot: Identifiable {
     let sourceDuration: Double
     let timelineStart: Double
     let timelineDuration: Double
+    let volume: Float
+    let muted: Bool
     let sourcePath: String
 }
 
@@ -50,6 +54,8 @@ final class NativeTimelineEngine {
                 type: track.type.nativeBridgeName,
                 layer: track.layer.rawValue,
                 muted: track.isMuted,
+                volume: Double(track.volume),
+                solo: track.isSolo,
                 locked: track.isLocked
             )
 
@@ -65,6 +71,8 @@ final class NativeTimelineEngine {
                     timelineStart: clip.timelineRange.start.seconds,
                     timelineDuration: clip.timelineRange.duration.seconds,
                     speed: clip.nativeSpeed,
+                    volume: clip.nativeVolume,
+                    muted: clip.nativeMuted,
                     enabled: clip.isEnabled
                 )
             }
@@ -108,6 +116,8 @@ final class NativeTimelineEngine {
             type: track.type.nativeBridgeName,
             layer: track.layer.rawValue,
             muted: track.isMuted,
+            volume: Double(track.volume),
+            solo: track.isSolo,
             locked: track.isLocked
         )
     }
@@ -122,6 +132,18 @@ final class NativeTimelineEngine {
     func setTrackMuted(id: UUID, muted: Bool) -> Bool {
         guard isSynchronized else { return false }
         return bridge.muteTrack(withId: id.uuidString, muted: muted)
+    }
+
+    @discardableResult
+    func setTrackVolume(id: UUID, volume: Float) -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.updateTrackVolume(withId: id.uuidString, volume: Double(max(volume, 0)))
+    }
+
+    @discardableResult
+    func setTrackSolo(id: UUID, solo: Bool) -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.updateTrackSolo(withId: id.uuidString, solo: solo)
     }
 
     @discardableResult
@@ -149,8 +171,22 @@ final class NativeTimelineEngine {
             timelineStart: clip.timelineRange.start.seconds,
             timelineDuration: clip.timelineRange.duration.seconds,
             speed: clip.nativeSpeed,
+            volume: clip.nativeVolume,
+            muted: clip.nativeMuted,
             enabled: clip.isEnabled
         )
+    }
+
+    @discardableResult
+    func setClipVolume(id: UUID, volume: Float) -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.updateClipVolume(withId: id.uuidString, volume: Double(max(volume, 0)))
+    }
+
+    @discardableResult
+    func setClipMuted(id: UUID, muted: Bool) -> Bool {
+        guard isSynchronized else { return false }
+        return bridge.updateClipMuted(withId: id.uuidString, muted: muted)
     }
 
     @discardableResult
@@ -229,6 +265,14 @@ private extension NativeTrackSnapshot {
         self.type = type
         self.layer = layer
         self.muted = muted
+        if let volume = dictionary["volume"] as? Float {
+            self.volume = volume
+        } else if let volume = dictionary["volume"] as? Double {
+            self.volume = Float(volume)
+        } else {
+            self.volume = 1.0
+        }
+        self.solo = dictionary["solo"] as? Bool ?? false
         self.locked = locked
         self.clips = clipDictionaries.compactMap(NativeClipSnapshot.init(dictionary:))
     }
@@ -256,7 +300,37 @@ private extension NativeClipSnapshot {
         self.sourceDuration = sourceDuration
         self.timelineStart = timelineStart
         self.timelineDuration = timelineDuration
+        if let volume = dictionary["volume"] as? Float {
+            self.volume = volume
+        } else if let volume = dictionary["volume"] as? Double {
+            self.volume = Float(volume)
+        } else {
+            self.volume = 1.0
+        }
+        self.muted = dictionary["muted"] as? Bool ?? false
         self.sourcePath = dictionary["sourcePath"] as? String ?? ""
+    }
+}
+
+private extension ClipProtocol {
+    var nativeVolume: Double {
+        switch self {
+        case let videoClip as VideoClip:
+            return Double(videoClip.volume)
+        case let audioClip as AudioClip:
+            return Double(audioClip.volume)
+        default:
+            return 1.0
+        }
+    }
+
+    var nativeMuted: Bool {
+        switch self {
+        case let videoClip as VideoClip:
+            return videoClip.isMuted
+        default:
+            return false
+        }
     }
 }
 

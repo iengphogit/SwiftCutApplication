@@ -14,9 +14,13 @@ NS_ASSUME_NONNULL_BEGIN
                   type:(NSString *)type
                  layer:(NSInteger)layer
                  muted:(BOOL)muted
+                volume:(double)volume
+                  solo:(BOOL)solo
                 locked:(BOOL)locked;
 - (BOOL)removeTrackWithId:(NSString *)trackId;
 - (BOOL)muteTrackWithId:(NSString *)trackId muted:(BOOL)muted;
+- (BOOL)updateTrackVolumeWithId:(NSString *)trackId volume:(double)volume;
+- (BOOL)updateTrackSoloWithId:(NSString *)trackId solo:(BOOL)solo;
 - (BOOL)lockTrackWithId:(NSString *)trackId locked:(BOOL)locked;
 - (BOOL)addClipToTrackWithId:(NSString *)trackId
                       clipId:(NSString *)clipId
@@ -28,6 +32,8 @@ NS_ASSUME_NONNULL_BEGIN
                timelineStart:(double)timelineStart
             timelineDuration:(double)timelineDuration
                        speed:(double)speed
+                      volume:(double)volume
+                       muted:(BOOL)muted
                      enabled:(BOOL)enabled;
 - (BOOL)removeClipWithId:(NSString *)clipId;
 - (BOOL)rippleDeleteClipWithId:(NSString *)clipId;
@@ -36,6 +42,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)trimClipWithId:(NSString *)clipId
     sourceStartSeconds:(double)sourceStartSeconds
   sourceDurationSeconds:(double)sourceDurationSeconds;
+- (BOOL)updateClipVolumeWithId:(NSString *)clipId volume:(double)volume;
+- (BOOL)updateClipMutedWithId:(NSString *)clipId muted:(BOOL)muted;
 - (NSString * _Nullable)splitClipWithId:(NSString *)clipId
                         splitTimeSeconds:(double)splitTimeSeconds;
 - (BOOL)canUndo;

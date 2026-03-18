@@ -16,6 +16,7 @@ NS_ASSUME_NONNULL_BEGIN
                      activeVisualSummary:(NSString * _Nullable)activeVisualSummary;
 - (void)updateActiveTextOverlays:(NSArray<NSDictionary *> * _Nullable)overlays;
 - (void)updateActiveVisualOverlays:(NSArray<NSDictionary *> * _Nullable)overlays;
+- (void)updateActiveAudioClips:(NSArray<NSDictionary *> * _Nullable)clips;
 
 @end
 

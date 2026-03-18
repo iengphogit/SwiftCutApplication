@@ -120,8 +120,28 @@ final class NativeEditorEngine {
     }
 
     @discardableResult
+    func setTrackVolume(id: UUID, volume: Float) -> Bool {
+        timelineEngine.setTrackVolume(id: id, volume: volume)
+    }
+
+    @discardableResult
+    func setTrackSolo(id: UUID, solo: Bool) -> Bool {
+        timelineEngine.setTrackSolo(id: id, solo: solo)
+    }
+
+    @discardableResult
     func setTrackLocked(id: UUID, locked: Bool) -> Bool {
         timelineEngine.setTrackLocked(id: id, locked: locked)
+    }
+
+    @discardableResult
+    func setClipVolume(id: UUID, volume: Float) -> Bool {
+        timelineEngine.setClipVolume(id: id, volume: volume)
+    }
+
+    @discardableResult
+    func setClipMuted(id: UUID, muted: Bool) -> Bool {
+        timelineEngine.setClipMuted(id: id, muted: muted)
     }
 
     @discardableResult
@@ -178,6 +198,8 @@ final class NativeEditorEngine {
                 layer: TrackLayer(rawValue: snapshot.layer) ?? defaultLayer(for: type),
                 name: snapshot.name,
                 isMuted: snapshot.muted,
+                volume: snapshot.volume,
+                isSolo: snapshot.solo,
                 isLocked: snapshot.locked
             )
         }

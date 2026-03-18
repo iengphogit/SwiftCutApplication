@@ -2,6 +2,19 @@ import SwiftUI
 import Combine
 import PhotosUI
 import UIKit
+import AVFoundation
+
+struct TimelineToast: Identifiable, Equatable {
+    enum Style {
+        case success
+        case error
+        case info
+    }
+
+    let id = UUID()
+    let message: String
+    let style: Style
+}
 
 @MainActor
 class TimelineEditorViewModel: ObservableObject {
@@ -11,6 +24,8 @@ class TimelineEditorViewModel: ObservableObject {
     @Published var duration: CMTime = .zero
     @Published private(set) var previewSeekCommand: PreviewSeekCommand?
     @Published private(set) var isProjectLoading: Bool = false
+    @Published private(set) var isExtractingAudio: Bool = false
+    @Published var toast: TimelineToast?
     @Published private(set) var compositionFrame: CompositionFrame?
     @Published var tracks: [TrackDisplayModel] = []
     @Published var canUndo: Bool = false
@@ -417,30 +432,69 @@ class TimelineEditorViewModel: ObservableObject {
     func extractAudio(from clipId: UUID) {
         guard let (_, clip) = engine.timeline.clip(for: clipId),
               let videoClip = clip as? VideoClip,
-              !hasMatchingAudioClip(for: videoClip) else {
+              !hasMatchingAudioClip(for: videoClip),
+              !isExtractingAudio else {
             return
         }
 
+        let nativeClipSnapshot = nativeClipSnapshot(for: clipId)
+        let resolvedSourceRange = nativeClipSnapshot.map {
+            CMTimeRange(
+                start: CMTime(seconds: $0.sourceStart, preferredTimescale: 600),
+                duration: CMTime(seconds: $0.sourceDuration, preferredTimescale: 600)
+            )
+        } ?? videoClip.sourceRange
+        let resolvedTimelineRange = nativeClipSnapshot.map {
+            CMTimeRange(
+                start: CMTime(seconds: $0.timelineStart, preferredTimescale: 600),
+                duration: CMTime(seconds: $0.timelineDuration, preferredTimescale: 600)
+            )
+        } ?? videoClip.timelineRange
         let linkedClipGroupId = videoClip.linkedClipGroupId ?? UUID()
+        isExtractingAudio = true
+        Task {
+            guard let audioURL = await exportedAudioURL(from: videoClip.sourceUrl) else {
+                AppLogger.log("Extract audio error: Failed to export embedded audio")
+                toast = TimelineToast(message: "Failed to extract audio", style: .error)
+                isExtractingAudio = false
+                return
+            }
 
-        let didAddAudioClip = nativeEditorEngine.addClip(
-            AudioClip(
-                linkedClipGroupId: linkedClipGroupId,
-                sourceUrl: videoClip.sourceUrl,
-                sourceRange: videoClip.sourceRange,
-                timelineRange: videoClip.timelineRange
-            ),
-            toTrackType: .audio,
-            named: "Audio"
-        )
+            let didAddAudioClip = nativeEditorEngine.addClip(
+                AudioClip(
+                    linkedClipGroupId: linkedClipGroupId,
+                    sourceUrl: audioURL,
+                    sourceRange: resolvedSourceRange,
+                    timelineRange: resolvedTimelineRange
+                ),
+                toTrackType: .audio,
+                named: "Audio"
+            )
 
-        guard didAddAudioClip else {
-            AppLogger.log("Extract audio error: Failed to add extracted audio clip")
-            return
+            guard didAddAudioClip else {
+                AppLogger.log("Extract audio error: Failed to add extracted audio clip")
+                toast = TimelineToast(message: "Failed to add audio track", style: .error)
+                isExtractingAudio = false
+                return
+            }
+
+            markVideoClipExtracted(videoClip.id, linkedClipGroupId: linkedClipGroupId)
+            applyNativeSnapshotToSwiftTimeline()
+            if !hasAudioTrackVisible(sourceURL: audioURL, timelineRange: resolvedTimelineRange) {
+                fallbackImportClip(
+                    from: audioURL,
+                    trackType: .audio,
+                    sourceRange: resolvedSourceRange,
+                    timelineRange: resolvedTimelineRange,
+                    linkedClipGroupId: linkedClipGroupId
+                )
+                nativeEditorEngine.syncTimeline(from: engine.timeline)
+                applyNativeSnapshotToSwiftTimeline()
+            }
+            refreshDisplay()
+            toast = TimelineToast(message: "Audio extracted", style: .success)
+            isExtractingAudio = false
         }
-
-        applyNativeSnapshotToSwiftTimeline()
-        refreshDisplay()
     }
 
     func removeTrack(_ trackId: UUID) {
@@ -465,6 +519,28 @@ class TimelineEditorViewModel: ObservableObject {
         refreshDisplay()
     }
 
+    func setTrackVolume(_ trackId: UUID, volume: Float) {
+        if nativeEditorEngine.setTrackVolume(id: trackId, volume: volume) {
+            applyNativeSnapshotToSwiftTimeline()
+            refreshDisplay()
+            return
+        }
+
+        engine.setTrackVolume(trackId, volume: volume)
+        refreshDisplay()
+    }
+
+    func setTrackSolo(_ trackId: UUID, solo: Bool) {
+        if nativeEditorEngine.setTrackSolo(id: trackId, solo: solo) {
+            applyNativeSnapshotToSwiftTimeline()
+            refreshDisplay()
+            return
+        }
+
+        engine.setTrackSolo(trackId, solo: solo)
+        refreshDisplay()
+    }
+
     func setTrackLocked(_ trackId: UUID, locked: Bool) {
         if nativeEditorEngine.setTrackLocked(id: trackId, locked: locked) {
             applyNativeSnapshotToSwiftTimeline()
@@ -473,6 +549,28 @@ class TimelineEditorViewModel: ObservableObject {
         }
 
         engine.lockTrack(trackId, locked: locked)
+        refreshDisplay()
+    }
+
+    func setClipVolume(_ clipId: UUID, volume: Float) {
+        if nativeEditorEngine.setClipVolume(id: clipId, volume: volume) {
+            applyNativeSnapshotToSwiftTimeline()
+            refreshDisplay()
+            return
+        }
+
+        engine.setClipVolume(clipId, volume: volume)
+        refreshDisplay()
+    }
+
+    func setClipMuted(_ clipId: UUID, muted: Bool) {
+        if nativeEditorEngine.setClipMuted(id: clipId, muted: muted) {
+            applyNativeSnapshotToSwiftTimeline()
+            refreshDisplay()
+            return
+        }
+
+        engine.setClipMuted(clipId, muted: muted)
         refreshDisplay()
     }
     
@@ -623,6 +721,7 @@ struct ClipDisplayModel: Identifiable {
     let sourceDurationSeconds: Double
     let sourcePath: String
     let hasThumbnail: Bool
+    let showsEmbeddedWaveform: Bool
 }
 
 private extension TimelineEditorViewModel {
@@ -657,6 +756,7 @@ private extension TimelineEditorViewModel {
     }
 
     private func applyNativeSnapshotToSwiftTimeline() {
+        nativeTimelineSnapshot = nativeEditorEngine.timelineSnapshot()
         let currentTimeline = engine.timeline
         let existingClipsByID = Dictionary(
             uniqueKeysWithValues: currentTimeline.tracks
@@ -712,21 +812,36 @@ private extension TimelineEditorViewModel {
                     switch clipType {
                     case .video:
                         guard let sourceURL else { return nil }
+                        let existingVideoClip = existingClip as? VideoClip
                         return VideoClip(
                             id: nativeClip.id,
                             linkedClipGroupId: linkedClipGroupId,
                             sourceUrl: sourceURL,
                             sourceRange: sourceRange,
-                            timelineRange: timelineRange
+                            timelineRange: timelineRange,
+                            isEnabled: existingVideoClip?.isEnabled ?? true,
+                            speed: existingVideoClip?.speed ?? 1.0,
+                            volume: nativeClip.volume,
+                            isMuted: nativeClip.muted,
+                            transform: existingVideoClip?.transform ?? .identity,
+                            filters: existingVideoClip?.filters ?? [],
+                            adjustments: existingVideoClip?.adjustments ?? .default,
+                            animations: existingVideoClip?.animations ?? []
                         )
                     case .audio:
                         guard let sourceURL else { return nil }
+                        let existingAudioClip = existingClip as? AudioClip
                         return AudioClip(
                             id: nativeClip.id,
                             linkedClipGroupId: linkedClipGroupId,
                             sourceUrl: sourceURL,
                             sourceRange: sourceRange,
-                            timelineRange: timelineRange
+                            timelineRange: timelineRange,
+                            isEnabled: existingAudioClip?.isEnabled ?? true,
+                            volume: nativeClip.volume,
+                            fadeInDuration: existingAudioClip?.fadeInDuration ?? .zero,
+                            fadeOutDuration: existingAudioClip?.fadeOutDuration ?? .zero,
+                            effects: existingAudioClip?.effects ?? []
                         )
                     case .overlay:
                         guard let sourceURL else { return nil }
@@ -753,6 +868,8 @@ private extension TimelineEditorViewModel {
                     layer: layer,
                     name: nativeTrack.name,
                     isMuted: nativeTrack.muted,
+                    volume: nativeTrack.volume,
+                    isSolo: nativeTrack.solo,
                     isLocked: nativeTrack.locked,
                     clips: clips
                 )
@@ -786,7 +903,14 @@ private extension TimelineEditorViewModel {
                         sourceStartSeconds: nativeClip.sourceStart,
                         sourceDurationSeconds: nativeClip.sourceDuration,
                         sourcePath: nativeClip.sourcePath,
-                        hasThumbnail: clipType == .video || clipType == .overlay
+                        hasThumbnail: clipType == .video || clipType == .overlay,
+                        showsEmbeddedWaveform: clipType == .video &&
+                            shouldShowEmbeddedWaveform(
+                                clipId: nativeClip.id,
+                                sourcePath: nativeClip.sourcePath,
+                                timelineStart: nativeClip.timelineStart,
+                                timelineDuration: nativeClip.timelineDuration
+                            )
                     )
                 },
                 isMuted: nativeTrack.muted,
@@ -813,7 +937,8 @@ private extension TimelineEditorViewModel {
                         sourceStartSeconds: clip.sourceRange.start.seconds,
                         sourceDurationSeconds: clip.sourceRange.duration.seconds,
                         sourcePath: clip.nativeSourcePath ?? "",
-                        hasThumbnail: track.type == .video || track.type == .overlay
+                        hasThumbnail: track.type == .video || track.type == .overlay,
+                        showsEmbeddedWaveform: shouldShowEmbeddedWaveform(for: clip)
                     )
                 },
                 isMuted: track.isMuted,
@@ -848,6 +973,43 @@ private extension TimelineEditorViewModel {
         case .audio:
             return 4
         }
+    }
+
+    private func shouldShowEmbeddedWaveform(for clip: any ClipProtocol) -> Bool {
+        guard let videoClip = clip as? VideoClip else {
+            return false
+        }
+        // Once a video clip has gone through extract, its lane stays filmstrip-only.
+        guard videoClip.linkedClipGroupId == nil else {
+            return false
+        }
+        return !hasMatchingAudioClip(for: videoClip)
+    }
+
+    private func shouldShowEmbeddedWaveform(
+        clipId: UUID,
+        sourcePath: String,
+        timelineStart: Double,
+        timelineDuration: Double
+    ) -> Bool {
+        guard let (_, clip) = engine.timeline.clip(for: clipId),
+              let videoClip = clip as? VideoClip else {
+            return !engine.timeline.tracks
+                .filter { $0.type == .audio }
+                .flatMap(\.clips)
+                .compactMap { $0 as? AudioClip }
+                .contains { audioClip in
+                    audioClip.sourceUrl.path == sourcePath &&
+                    abs(audioClip.timelineRange.start.seconds - timelineStart) < 0.001 &&
+                    abs(audioClip.timelineRange.duration.seconds - timelineDuration) < 0.001
+                }
+        }
+
+        // The extracted audio lane owns waveform display after extract; it never moves back.
+        guard videoClip.linkedClipGroupId == nil else {
+            return false
+        }
+        return !hasMatchingAudioClip(for: videoClip)
     }
 
     private func importVideoIntoNativeEngine(
@@ -948,31 +1110,42 @@ private extension TimelineEditorViewModel {
                 }
 
                 if trackType == .video && extractEmbeddedAudio && hasEmbeddedAudio {
-                    let didAddAudioClip = self.nativeEditorEngine.addClip(
-                        AudioClip(
-                            linkedClipGroupId: linkedClipGroupId,
-                            sourceUrl: url,
-                            sourceRange: sourceRange,
-                            timelineRange: timelineRange
-                        ),
-                        toTrackType: .audio,
-                        named: "Audio"
-                    )
+                    Task { @MainActor in
+                        if let extractedAudioURL = await self.exportedAudioURL(from: url) {
+                            let didAddAudioClip = self.nativeEditorEngine.addClip(
+                                AudioClip(
+                                    linkedClipGroupId: linkedClipGroupId,
+                                    sourceUrl: extractedAudioURL,
+                                    sourceRange: sourceRange,
+                                    timelineRange: timelineRange
+                                ),
+                                toTrackType: .audio,
+                                named: "Audio"
+                            )
 
-                    if !didAddAudioClip {
+                            if !didAddAudioClip {
+                                self.applyNativeSnapshotToSwiftTimeline()
+                                self.fallbackImportClip(
+                                    from: extractedAudioURL,
+                                    trackType: .audio,
+                                    sourceRange: sourceRange,
+                                    timelineRange: timelineRange,
+                                    linkedClipGroupId: linkedClipGroupId
+                                )
+                                self.nativeEditorEngine.syncTimeline(from: self.engine.timeline)
+                                AppLogger.log(
+                                    "Import warning: Recovered extracted audio by syncing Swift timeline after native addClip failure"
+                                )
+                            }
+                        } else {
+                            AppLogger.log("Import warning: Failed to export embedded audio track")
+                        }
+
                         self.applyNativeSnapshotToSwiftTimeline()
-                        self.fallbackImportClip(
-                            from: url,
-                            trackType: .audio,
-                            sourceRange: sourceRange,
-                            timelineRange: timelineRange,
-                            linkedClipGroupId: linkedClipGroupId
-                        )
-                        self.nativeEditorEngine.syncTimeline(from: self.engine.timeline)
-                        AppLogger.log(
-                            "Import warning: Recovered extracted audio by syncing Swift timeline after native addClip failure"
-                        )
+                        self.refreshDisplay()
+                        completion?()
                     }
+                    return
                 }
 
                 self.applyNativeSnapshotToSwiftTimeline()
@@ -1008,18 +1181,7 @@ private extension TimelineEditorViewModel {
     }
 
     private func linkedClipIDs(for clipId: UUID) -> [UUID] {
-        guard let (_, clip) = engine.timeline.clip(for: clipId) else {
-            return []
-        }
-
-        if let videoClip = clip as? VideoClip {
-            return matchingAudioClips(for: videoClip).map(\.id)
-        }
-
-        if let audioClip = clip as? AudioClip {
-            return matchingVideoClips(for: audioClip).map(\.id)
-        }
-
+        _ = clipId
         return []
     }
 
@@ -1065,6 +1227,58 @@ private extension TimelineEditorViewModel {
                     abs(videoClip.sourceRange.start.seconds - audioClip.sourceRange.start.seconds) < 0.001 &&
                     abs(videoClip.sourceRange.duration.seconds - audioClip.sourceRange.duration.seconds) < 0.001
             }
+    }
+
+    private func hasAudioTrackVisible(
+        sourceURL: URL,
+        timelineRange: CMTimeRange
+    ) -> Bool {
+        let audioClips = engine.timeline.tracks
+            .filter { $0.type == .audio }
+            .flatMap(\.clips)
+            .compactMap { $0 as? AudioClip }
+
+        return audioClips.contains { audioClip in
+            audioClip.sourceUrl.path == sourceURL.path &&
+            abs(audioClip.timelineRange.start.seconds - timelineRange.start.seconds) < 0.001 &&
+            abs(audioClip.timelineRange.duration.seconds - timelineRange.duration.seconds) < 0.001
+        }
+    }
+
+    private func nativeClipSnapshot(for clipId: UUID) -> NativeClipSnapshot? {
+        nativeTimelineSnapshot.tracks
+            .flatMap(\.clips)
+            .first(where: { $0.id == clipId })
+    }
+
+    private func markVideoClipExtracted(_ clipId: UUID, linkedClipGroupId: UUID) {
+        let currentTimeline = engine.timeline
+        let updatedTracks = currentTimeline.tracks.map { track -> Track in
+            guard track.type == .video else { return track }
+
+            let updatedClips = track.clips.map { clip -> any ClipProtocol in
+                guard var videoClip = clip as? VideoClip, videoClip.id == clipId else {
+                    return clip
+                }
+                videoClip.linkedClipGroupId = linkedClipGroupId
+                return videoClip
+            }
+
+            var updatedTrack = track
+            updatedTrack.clips = updatedClips
+            return updatedTrack
+        }
+
+        let updatedTimeline = Timeline(
+            id: currentTimeline.id,
+            name: currentTimeline.name,
+            createdAt: currentTimeline.createdAt,
+            modifiedAt: Date(),
+            settings: currentTimeline.settings,
+            tracks: updatedTracks
+        )
+        engine.setTimeline(updatedTimeline)
+        nativeEditorEngine.syncTimeline(from: updatedTimeline)
     }
 
     private func fallbackImportClip(
@@ -1137,8 +1351,7 @@ private extension TimelineEditorViewModel {
 
             let sourceRange = CMTimeRangeMake(start: .zero, duration: asset.duration)
             let timelineRange = CMTimeRangeMake(start: .zero, duration: asset.duration)
-            let hasEmbeddedAudio = !asset.tracks(withMediaType: .audio).isEmpty
-            let linkedClipGroupId = project.mediaKind == .video && hasEmbeddedAudio ? UUID() : nil
+            let linkedClipGroupId: UUID? = nil
 
             DispatchQueue.main.async {
                 switch project.mediaKind {
@@ -1173,6 +1386,57 @@ private extension TimelineEditorViewModel {
         nativeEditorEngine.seek(to: .zero)
         previewSeekCommand = PreviewSeekCommand(timeSeconds: 0)
         refreshCompositionFrame(at: .zero)
+    }
+
+    private func exportedAudioURL(from sourceURL: URL) async -> URL? {
+        let asset = AVURLAsset(url: sourceURL)
+        guard !asset.tracks(withMediaType: .audio).isEmpty else {
+            return nil
+        }
+
+        let lowercasedExtension = sourceURL.pathExtension.lowercased()
+        let directAudioExtensions: Set<String> = ["aac", "aif", "aiff", "caf", "flac", "m4a", "mp3", "wav"]
+        if directAudioExtensions.contains(lowercasedExtension) {
+            return sourceURL
+        }
+
+        guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            return nil
+        }
+
+        let outputURL = extractedAudioOutputURL(for: sourceURL)
+        try? FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? FileManager.default.removeItem(at: outputURL)
+
+        exportSession.outputURL = outputURL
+        exportSession.outputFileType = .m4a
+        exportSession.shouldOptimizeForNetworkUse = true
+
+        await withCheckedContinuation { continuation in
+            exportSession.exportAsynchronously {
+                continuation.resume()
+            }
+        }
+
+        guard exportSession.status == .completed else {
+            AppLogger.log("Audio export error: \(exportSession.error?.localizedDescription ?? "Unknown export error")")
+            return nil
+        }
+
+        return outputURL
+    }
+
+    private func extractedAudioOutputURL(for sourceURL: URL) -> URL {
+        let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let directoryURL = appSupportURL
+            .appendingPathComponent("SwiftCut", isDirectory: true)
+            .appendingPathComponent("ExtractedAudio", isDirectory: true)
+        let filename = sourceURL.deletingPathExtension().lastPathComponent
+        return directoryURL.appendingPathComponent("\(filename)-\(UUID().uuidString).m4a")
     }
 }
 

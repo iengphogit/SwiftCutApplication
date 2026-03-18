@@ -6,6 +6,9 @@ struct PreviewSeekCommand: Equatable {
 }
 
 struct NativeEnginePreviewHost: UIViewRepresentable {
+    private let audioEngine: NativeAudioEngineProtocol = NativeAudioEngine.shared
+    private let videoEngine: NativeVideoEngineProtocol = NativeVideoEngine.shared
+
     let compositionFrame: CompositionFrame?
     let durationSeconds: Double
     let desiredIsPlaying: Bool
@@ -33,7 +36,7 @@ struct NativeEnginePreviewHost: UIViewRepresentable {
         let activeVisualSummary = activeVisualSummary
         let activeTextOverlays = activeTextOverlays
         let activeVisualOverlays = activeVisualOverlays
-        let activeAudioClips = activeAudioClips
+        let activeAudioClips = audioEngine.transportPayloads(from: compositionFrame)
 
         view.onDisplayTimeChange = onDisplayTimeChange
         view.onPlaybackStateChange = onPlaybackStateChange
@@ -72,11 +75,15 @@ struct NativeEnginePreviewHost: UIViewRepresentable {
 
         let activeVisualOverlaySignature = visualOverlaySignature(activeVisualOverlays)
         if coordinator.lastAppliedVisualOverlaySignature != activeVisualOverlaySignature {
+            let activeVisualSourcePaths = activeVisualOverlays.compactMap { $0["sourcePath"] as? String }
+            Task {
+                await videoEngine.prewarmSources(activeVisualSourcePaths)
+            }
             view.updateActiveVisualOverlays(activeVisualOverlays)
             coordinator.lastAppliedVisualOverlaySignature = activeVisualOverlaySignature
         }
 
-        let activeAudioClipSignature = audioClipSignature(activeAudioClips)
+        let activeAudioClipSignature = audioClipSignature
         if coordinator.lastAppliedAudioClipSignature != activeAudioClipSignature {
             view.updateActiveAudioClips(activeAudioClips)
             coordinator.lastAppliedAudioClipSignature = activeAudioClipSignature
@@ -164,29 +171,12 @@ struct NativeEnginePreviewHost: UIViewRepresentable {
                 "sourcePath": clip.sourceURL?.path ?? "",
                 "sourceTimeSeconds": clip.sourceTimeSeconds,
                 "frameTimelineTimeSeconds": compositionFrame.timelineTimeSeconds,
+                "playbackRate": clip.playbackRate,
                 "renderContent": clip.kind == .overlay || clip.kind == .video,
                 "cropX": normalizedCropRect(for: clip)?.origin.x ?? -1,
                 "cropY": normalizedCropRect(for: clip)?.origin.y ?? -1,
                 "cropWidth": normalizedCropRect(for: clip)?.size.width ?? -1,
                 "cropHeight": normalizedCropRect(for: clip)?.size.height ?? -1
-            ]
-        }
-    }
-
-    private var activeAudioClips: [[AnyHashable: Any]] {
-        guard let compositionFrame else {
-            return []
-        }
-
-        return compositionFrame.audioClips.map { clip in
-            let timelineEnd = clip.timelineRange.start.seconds + clip.timelineRange.duration.seconds
-            return [
-                "clipId": clip.id.uuidString,
-                "sourcePath": clip.sourceURL.path,
-                "sourceTimeSeconds": clip.sourceTimeSeconds,
-                "remainingDurationSeconds": max(timelineEnd - compositionFrame.timelineTimeSeconds, 0),
-                "volume": Double(clip.volume),
-                "muted": clip.isMuted
             ]
         }
     }
@@ -223,26 +213,28 @@ struct NativeEnginePreviewHost: UIViewRepresentable {
 
     private func visualOverlaySignature(_ overlays: [[AnyHashable: Any]]) -> String {
         overlays.map { overlay in
+            let kind = overlay["kind"] as? String ?? ""
             let clipId = overlay["clipId"] as? String ?? ""
             let sourcePath = overlay["sourcePath"] as? String ?? ""
-            let sourceTimeSeconds = overlay["sourceTimeSeconds"] as? Double ?? 0
-            let frameTimelineTimeSeconds = overlay["frameTimelineTimeSeconds"] as? Double ?? 0
-            return "\(clipId)|\(sourcePath)|\(sourceTimeSeconds)|\(frameTimelineTimeSeconds)"
+            let normalizedX = overlay["normalizedX"] as? Double ?? 0
+            let normalizedY = overlay["normalizedY"] as? Double ?? 0
+            let scaleX = overlay["scaleX"] as? Double ?? 0
+            let scaleY = overlay["scaleY"] as? Double ?? 0
+            let rotationDegrees = overlay["rotationDegrees"] as? Double ?? 0
+            let opacity = overlay["opacity"] as? Double ?? 0
+            let playbackRate = overlay["playbackRate"] as? Double ?? 1
+            let renderContent = overlay["renderContent"] as? Bool ?? false
+            let cropX = overlay["cropX"] as? Double ?? -1
+            let cropY = overlay["cropY"] as? Double ?? -1
+            let cropWidth = overlay["cropWidth"] as? Double ?? -1
+            let cropHeight = overlay["cropHeight"] as? Double ?? -1
+            return "\(kind)|\(clipId)|\(sourcePath)|\(normalizedX)|\(normalizedY)|\(scaleX)|\(scaleY)|\(rotationDegrees)|\(opacity)|\(playbackRate)|\(renderContent)|\(cropX)|\(cropY)|\(cropWidth)|\(cropHeight)"
         }
         .joined(separator: ",")
     }
 
-    private func audioClipSignature(_ clips: [[AnyHashable: Any]]) -> String {
-        clips.map { clip in
-            let clipId = clip["clipId"] as? String ?? ""
-            let sourcePath = clip["sourcePath"] as? String ?? ""
-            let sourceTimeSeconds = clip["sourceTimeSeconds"] as? Double ?? 0
-            let remainingDurationSeconds = clip["remainingDurationSeconds"] as? Double ?? 0
-            let volume = clip["volume"] as? Double ?? 1
-            let muted = clip["muted"] as? Bool ?? false
-            return "\(clipId)|\(sourcePath)|\(sourceTimeSeconds)|\(remainingDurationSeconds)|\(volume)|\(muted)"
-        }
-        .joined(separator: ",")
+    private var audioClipSignature: String {
+        audioEngine.transportSignature(from: compositionFrame)
     }
 
     final class Coordinator {

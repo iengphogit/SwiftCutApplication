@@ -31,6 +31,8 @@ struct TimelineClip {
     TimeRange timelineRange;
     bool enabled = true;
     double speed = 1.0;
+    double volume = 1.0;
+    bool muted = false;
 };
 
 struct TimelineTrack {
@@ -39,6 +41,8 @@ struct TimelineTrack {
     TrackType type = TrackType::video;
     int layer = 0;
     bool muted = false;
+    double volume = 1.0;
+    bool solo = false;
     bool locked = false;
     std::vector<TimelineClip> clips;
 };
@@ -65,6 +69,8 @@ public:
     void addTrack(const TimelineTrack &track);
     bool removeTrack(const std::string &trackId);
     bool setTrackMuted(const std::string &trackId, bool muted);
+    bool setTrackVolume(const std::string &trackId, double volume);
+    bool setTrackSolo(const std::string &trackId, bool solo);
     bool setTrackLocked(const std::string &trackId, bool locked);
     bool addClip(const std::string &trackId, const TimelineClip &clip);
     bool hasTrack(const std::string &trackId) const;
@@ -77,6 +83,8 @@ public:
         double sourceStartSeconds,
         double sourceDurationSeconds
     );
+    bool setClipVolume(const std::string &clipId, double volume);
+    bool setClipMuted(const std::string &clipId, bool muted);
     bool splitClip(const std::string &clipId, double splitTimeSeconds, std::string &newClipId);
     bool canUndo() const;
     bool canRedo() const;

@@ -26,7 +26,11 @@ protocol TimelineEngineProtocol: AnyObject {
     @discardableResult func addTrack(_ type: TrackType, name: String) -> UUID
     func removeTrack(_ trackId: UUID)
     func muteTrack(_ trackId: UUID, muted: Bool)
+    func setTrackVolume(_ trackId: UUID, volume: Float)
+    func setTrackSolo(_ trackId: UUID, solo: Bool)
     func lockTrack(_ trackId: UUID, locked: Bool)
+    func setClipVolume(_ clipId: UUID, volume: Float)
+    func setClipMuted(_ clipId: UUID, muted: Bool)
     
     func buildComposition() throws -> AVMutableComposition
     func clips(at time: CMTime) -> [any ClipProtocol]
@@ -289,6 +293,7 @@ final class TimelineEngine: TimelineEngineProtocol {
         if let videoClip = originalClip as? VideoClip {
             let firstPart = VideoClip(
                 id: videoClip.id,
+                linkedClipGroupId: videoClip.linkedClipGroupId,
                 sourceUrl: videoClip.sourceUrl,
                 sourceRange: CMTimeRangeMake(start: videoClip.sourceRange.start, duration: firstPartSourceDuration),
                 timelineRange: CMTimeRangeMake(start: videoClip.timelineRange.start, duration: firstPartDuration),
@@ -304,6 +309,7 @@ final class TimelineEngine: TimelineEngineProtocol {
 
             let secondPart = VideoClip(
                 id: UUID(),
+                linkedClipGroupId: videoClip.linkedClipGroupId,
                 sourceUrl: videoClip.sourceUrl,
                 sourceRange: CMTimeRangeMake(
                     start: videoClip.sourceRange.start + firstPartSourceDuration,
@@ -325,6 +331,7 @@ final class TimelineEngine: TimelineEngineProtocol {
         } else if let audioClip = originalClip as? AudioClip {
             let firstPart = AudioClip(
                 id: audioClip.id,
+                linkedClipGroupId: audioClip.linkedClipGroupId,
                 sourceUrl: audioClip.sourceUrl,
                 sourceRange: CMTimeRangeMake(start: audioClip.sourceRange.start, duration: firstPartSourceDuration),
                 timelineRange: CMTimeRangeMake(start: audioClip.timelineRange.start, duration: firstPartDuration),
@@ -337,6 +344,7 @@ final class TimelineEngine: TimelineEngineProtocol {
 
             let secondPart = AudioClip(
                 id: UUID(),
+                linkedClipGroupId: audioClip.linkedClipGroupId,
                 sourceUrl: audioClip.sourceUrl,
                 sourceRange: CMTimeRangeMake(
                     start: audioClip.sourceRange.start + firstPartSourceDuration,
@@ -424,6 +432,26 @@ final class TimelineEngine: TimelineEngineProtocol {
             timeline.tracks[index].isMuted = muted
         }
     }
+
+    func setTrackVolume(_ trackId: UUID, volume: Float) {
+        guard let index = timeline.tracks.firstIndex(where: { $0.id == trackId }) else {
+            return
+        }
+
+        applyEdit { timeline in
+            timeline.tracks[index].volume = max(volume, 0)
+        }
+    }
+
+    func setTrackSolo(_ trackId: UUID, solo: Bool) {
+        guard let index = timeline.tracks.firstIndex(where: { $0.id == trackId }) else {
+            return
+        }
+
+        applyEdit { timeline in
+            timeline.tracks[index].isSolo = solo
+        }
+    }
     
     func lockTrack(_ trackId: UUID, locked: Bool) {
         guard let index = timeline.tracks.firstIndex(where: { $0.id == trackId }) else {
@@ -432,6 +460,51 @@ final class TimelineEngine: TimelineEngineProtocol {
 
         applyEdit { timeline in
             timeline.tracks[index].isLocked = locked
+        }
+    }
+
+    func setClipVolume(_ clipId: UUID, volume: Float) {
+        guard let (trackIndex, clipIndex, clip) = locateClip(clipId) else {
+            return
+        }
+
+        guard !timeline.tracks[trackIndex].isLocked else {
+            return
+        }
+
+        let resolvedVolume = max(volume, 0)
+
+        applyEdit { timeline in
+            switch clip {
+            case var videoClip as VideoClip:
+                videoClip.volume = resolvedVolume
+                timeline.tracks[trackIndex].clips[clipIndex] = videoClip
+            case var audioClip as AudioClip:
+                audioClip.volume = resolvedVolume
+                timeline.tracks[trackIndex].clips[clipIndex] = audioClip
+            default:
+                break
+            }
+        }
+    }
+
+    func setClipMuted(_ clipId: UUID, muted: Bool) {
+        guard let (trackIndex, clipIndex, clip) = locateClip(clipId) else {
+            return
+        }
+
+        guard !timeline.tracks[trackIndex].isLocked else {
+            return
+        }
+
+        applyEdit { timeline in
+            switch clip {
+            case var videoClip as VideoClip:
+                videoClip.isMuted = muted
+                timeline.tracks[trackIndex].clips[clipIndex] = videoClip
+            default:
+                break
+            }
         }
     }
     

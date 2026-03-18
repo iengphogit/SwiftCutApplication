@@ -29,6 +29,8 @@
                   type:(NSString *)type
                  layer:(NSInteger)layer
                  muted:(BOOL)muted
+                volume:(double)volume
+                  solo:(BOOL)solo
                 locked:(BOOL)locked {
     swiftcut::TimelineTrack track;
     track.id = trackId.UTF8String;
@@ -36,6 +38,8 @@
     track.type = [self trackTypeFromString:type];
     track.layer = (int)layer;
     track.muted = muted;
+    track.volume = volume;
+    track.solo = solo;
     track.locked = locked;
     _engine.addTrack(track);
 }
@@ -46,6 +50,14 @@
 
 - (BOOL)muteTrackWithId:(NSString *)trackId muted:(BOOL)muted {
     return _engine.setTrackMuted(trackId.UTF8String, muted);
+}
+
+- (BOOL)updateTrackVolumeWithId:(NSString *)trackId volume:(double)volume {
+    return _engine.setTrackVolume(trackId.UTF8String, volume);
+}
+
+- (BOOL)updateTrackSoloWithId:(NSString *)trackId solo:(BOOL)solo {
+    return _engine.setTrackSolo(trackId.UTF8String, solo);
 }
 
 - (BOOL)lockTrackWithId:(NSString *)trackId locked:(BOOL)locked {
@@ -62,6 +74,8 @@
                timelineStart:(double)timelineStart
             timelineDuration:(double)timelineDuration
                        speed:(double)speed
+                      volume:(double)volume
+                       muted:(BOOL)muted
                      enabled:(BOOL)enabled {
     swiftcut::TimelineClip clip;
     clip.id = clipId.UTF8String;
@@ -73,6 +87,8 @@
     clip.timelineRange.startSeconds = timelineStart;
     clip.timelineRange.durationSeconds = timelineDuration;
     clip.speed = speed;
+    clip.volume = volume;
+    clip.muted = muted;
     clip.enabled = enabled;
     return _engine.addClip(trackId.UTF8String, clip);
 }
@@ -98,6 +114,14 @@
         sourceStartSeconds,
         sourceDurationSeconds
     );
+}
+
+- (BOOL)updateClipVolumeWithId:(NSString *)clipId volume:(double)volume {
+    return _engine.setClipVolume(clipId.UTF8String, volume);
+}
+
+- (BOOL)updateClipMutedWithId:(NSString *)clipId muted:(BOOL)muted {
+    return _engine.setClipMuted(clipId.UTF8String, muted);
 }
 
 - (NSString * _Nullable)splitClipWithId:(NSString *)clipId
@@ -136,14 +160,16 @@
             [clips addObject:@{
                 @"id": [NSString stringWithUTF8String:clip.id.c_str()],
                 @"name": [NSString stringWithUTF8String:clip.name.c_str()],
-                @"type": [self stringFromTrackType:clip.type],
-                @"sourceStart": @(clip.sourceRange.startSeconds),
-                @"sourceDuration": @(clip.sourceRange.durationSeconds),
-                @"timelineStart": @(clip.timelineRange.startSeconds),
-                @"timelineDuration": @(clip.timelineRange.durationSeconds),
-                @"sourcePath": clip.sourcePath.empty()
-                    ? @""
-                    : [NSString stringWithUTF8String:clip.sourcePath.c_str()]
+            @"type": [self stringFromTrackType:clip.type],
+            @"sourceStart": @(clip.sourceRange.startSeconds),
+            @"sourceDuration": @(clip.sourceRange.durationSeconds),
+            @"timelineStart": @(clip.timelineRange.startSeconds),
+            @"timelineDuration": @(clip.timelineRange.durationSeconds),
+            @"volume": @(clip.volume),
+            @"muted": @(clip.muted),
+            @"sourcePath": clip.sourcePath.empty()
+                ? @""
+                : [NSString stringWithUTF8String:clip.sourcePath.c_str()]
             }];
         }
 
@@ -153,6 +179,8 @@
             @"type": [self stringFromTrackType:track.type],
             @"layer": @(track.layer),
             @"muted": @(track.muted),
+            @"volume": @(track.volume),
+            @"solo": @(track.solo),
             @"locked": @(track.locked),
             @"clips": clips
         }];

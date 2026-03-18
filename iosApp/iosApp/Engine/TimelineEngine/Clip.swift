@@ -44,6 +44,7 @@ extension CMTimeRange: Codable {
 
 struct VideoClip: ClipProtocol {
     let id: UUID
+    var linkedClipGroupId: UUID?
     var sourceUrl: URL
     var sourceRange: CMTimeRange
     var timelineRange: CMTimeRange
@@ -70,6 +71,7 @@ struct VideoClip: ClipProtocol {
     
     init(
         id: UUID = UUID(),
+        linkedClipGroupId: UUID? = nil,
         sourceUrl: URL,
         sourceRange: CMTimeRange,
         timelineRange: CMTimeRange? = nil,
@@ -83,6 +85,7 @@ struct VideoClip: ClipProtocol {
         animations: [KeyframeAnimation] = []
     ) {
         self.id = id
+        self.linkedClipGroupId = linkedClipGroupId
         self.sourceUrl = sourceUrl
         self.sourceRange = sourceRange
         self.timelineRange = timelineRange ?? CMTimeRangeMake(start: .zero, duration: sourceRange.duration)
@@ -99,6 +102,7 @@ struct VideoClip: ClipProtocol {
 
 struct AudioClip: ClipProtocol {
     let id: UUID
+    var linkedClipGroupId: UUID?
     var sourceUrl: URL
     var sourceRange: CMTimeRange
     var timelineRange: CMTimeRange
@@ -126,6 +130,7 @@ struct AudioClip: ClipProtocol {
     
     init(
         id: UUID = UUID(),
+        linkedClipGroupId: UUID? = nil,
         sourceUrl: URL,
         sourceRange: CMTimeRange,
         timelineRange: CMTimeRange? = nil,
@@ -136,6 +141,7 @@ struct AudioClip: ClipProtocol {
         effects: [any AudioEffect] = []
     ) {
         self.id = id
+        self.linkedClipGroupId = linkedClipGroupId
         self.sourceUrl = sourceUrl
         self.sourceRange = sourceRange
         self.timelineRange = timelineRange ?? CMTimeRangeMake(start: .zero, duration: sourceRange.duration)
@@ -147,7 +153,7 @@ struct AudioClip: ClipProtocol {
     }
     
     enum CodingKeys: String, CodingKey {
-        case id, sourceUrl, sourceRange, timelineRange, isEnabled
+        case id, linkedClipGroupId, sourceUrl, sourceRange, timelineRange, isEnabled
         case volume, fadeInDurationSeconds, fadeOutDurationSeconds
         case effectWrappers
     }

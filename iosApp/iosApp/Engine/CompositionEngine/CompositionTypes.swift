@@ -38,6 +38,7 @@ struct VisualClipSnapshot: Identifiable, Codable {
     let trackLayer: TrackLayer
     let timelineRange: CMTimeRange
     let sourceTimeSeconds: Double
+    let playbackRate: Double
     let sourceURL: URL?
     let kind: CompositionClipKind
     let transform: CompositionTransform
@@ -49,10 +50,14 @@ struct AudioClipSnapshot: Identifiable, Codable {
     let id: UUID
     let trackId: UUID
     let timelineRange: CMTimeRange
+    let sourceStartSeconds: Double
     let sourceTimeSeconds: Double
     let sourceURL: URL
     let volume: Float
+    let trackVolume: Float
+    let effectiveVolume: Float
     let isMuted: Bool
+    let isTrackSolo: Bool
 }
 
 struct CompositionFrame: Codable {

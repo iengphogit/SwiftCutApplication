@@ -59,6 +59,36 @@ bool NativeTimelineEngine::setTrackMuted(const std::string &trackId, bool muted)
     return true;
 }
 
+bool NativeTimelineEngine::setTrackVolume(const std::string &trackId, double volume) {
+    auto trackIt = std::find_if(
+        tracks_.begin(),
+        tracks_.end(),
+        [&](const TimelineTrack &track) { return track.id == trackId; }
+    );
+    if (trackIt == tracks_.end()) {
+        return false;
+    }
+
+    pushUndoState();
+    trackIt->volume = std::max(0.0, volume);
+    return true;
+}
+
+bool NativeTimelineEngine::setTrackSolo(const std::string &trackId, bool solo) {
+    auto trackIt = std::find_if(
+        tracks_.begin(),
+        tracks_.end(),
+        [&](const TimelineTrack &track) { return track.id == trackId; }
+    );
+    if (trackIt == tracks_.end()) {
+        return false;
+    }
+
+    pushUndoState();
+    trackIt->solo = solo;
+    return true;
+}
+
 bool NativeTimelineEngine::setTrackLocked(const std::string &trackId, bool locked) {
     auto trackIt = std::find_if(
         tracks_.begin(),
@@ -277,6 +307,50 @@ bool NativeTimelineEngine::trimClip(
             ? sourceDurationSeconds / clampedSpeed
             : sourceDurationSeconds;
         return clipIt->timelineRange.durationSeconds > 0.0;
+    }
+
+    return false;
+}
+
+bool NativeTimelineEngine::setClipVolume(const std::string &clipId, double volume) {
+    for (auto &track : tracks_) {
+        auto clipIt = std::find_if(
+            track.clips.begin(),
+            track.clips.end(),
+            [&](const TimelineClip &clip) { return clip.id == clipId; }
+        );
+        if (clipIt == track.clips.end()) {
+            continue;
+        }
+        if (track.locked) {
+            return false;
+        }
+
+        pushUndoState();
+        clipIt->volume = std::max(0.0, volume);
+        return true;
+    }
+
+    return false;
+}
+
+bool NativeTimelineEngine::setClipMuted(const std::string &clipId, bool muted) {
+    for (auto &track : tracks_) {
+        auto clipIt = std::find_if(
+            track.clips.begin(),
+            track.clips.end(),
+            [&](const TimelineClip &clip) { return clip.id == clipId; }
+        );
+        if (clipIt == track.clips.end()) {
+            continue;
+        }
+        if (track.locked) {
+            return false;
+        }
+
+        pushUndoState();
+        clipIt->muted = muted;
+        return true;
     }
 
     return false;

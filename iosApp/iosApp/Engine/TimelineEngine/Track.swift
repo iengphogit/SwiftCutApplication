@@ -7,6 +7,8 @@ struct Track: Identifiable, Codable {
     let layer: TrackLayer
     var name: String
     var isMuted: Bool
+    var volume: Float
+    var isSolo: Bool
     var isLocked: Bool
     var clips: [any ClipProtocol]
     
@@ -21,6 +23,8 @@ struct Track: Identifiable, Codable {
         layer: TrackLayer,
         name: String,
         isMuted: Bool = false,
+        volume: Float = 1.0,
+        isSolo: Bool = false,
         isLocked: Bool = false,
         clips: [any ClipProtocol] = []
     ) {
@@ -29,6 +33,8 @@ struct Track: Identifiable, Codable {
         self.layer = layer
         self.name = name
         self.isMuted = isMuted
+        self.volume = volume
+        self.isSolo = isSolo
         self.isLocked = isLocked
         self.clips = clips
     }
@@ -70,7 +76,7 @@ struct Track: Identifiable, Codable {
 
 extension Track {
     enum CodingKeys: String, CodingKey {
-        case id, type, layer, name, isMuted, isLocked
+        case id, type, layer, name, isMuted, volume, isSolo, isLocked
         case clipData
     }
     
@@ -85,6 +91,8 @@ extension Track {
         layer = try container.decode(TrackLayer.self, forKey: .layer)
         name = try container.decode(String.self, forKey: .name)
         isMuted = try container.decode(Bool.self, forKey: .isMuted)
+        volume = try container.decodeIfPresent(Float.self, forKey: .volume) ?? 1.0
+        isSolo = try container.decodeIfPresent(Bool.self, forKey: .isSolo) ?? false
         isLocked = try container.decode(Bool.self, forKey: .isLocked)
         
         let clipData = try container.decode([ClipWrapper].self, forKey: .clipData)
@@ -98,6 +106,8 @@ extension Track {
         try container.encode(layer, forKey: .layer)
         try container.encode(name, forKey: .name)
         try container.encode(isMuted, forKey: .isMuted)
+        try container.encode(volume, forKey: .volume)
+        try container.encode(isSolo, forKey: .isSolo)
         try container.encode(isLocked, forKey: .isLocked)
         
         let clipData = clips.map { ClipWrapper($0) }

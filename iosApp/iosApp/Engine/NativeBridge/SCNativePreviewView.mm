@@ -1,4 +1,5 @@
 #import "SCNativePreviewView.h"
+#import "SCAudioTransportEngine.h"
 
 #import <CoreImage/CoreImage.h>
 #import <objc/runtime.h>
@@ -13,11 +14,7 @@
 @property (nonatomic, strong) NSMutableArray<UILabel *> *textOverlayLabels;
 @property (nonatomic, strong) NSMutableArray<CALayer *> *visualGuideLayers;
 @property (nonatomic, strong) CALayer *baseVideoLayer;
-@property (nonatomic, strong) AVAudioEngine *audioEngine;
-@property (nonatomic, strong) NSMutableDictionary<NSString *, AVAudioPlayerNode *> *audioNodes;
-@property (nonatomic, strong) NSMutableDictionary<NSString *, AVAudioFile *> *audioFiles;
-@property (nonatomic, copy) NSArray<NSDictionary *> *activeAudioClips;
-@property (nonatomic, copy) NSString *activeAudioSignature;
+@property (nonatomic, strong) SCAudioTransportEngine *audioTransportEngine;
 @property (nonatomic, strong, nullable) CADisplayLink *displayLink;
 @property (nonatomic, assign) double previewDurationSeconds;
 @property (nonatomic, assign) double currentTimeSeconds;
@@ -37,24 +34,8 @@
 static const void *kSCContentSourcePathKey = &kSCContentSourcePathKey;
 static const void *kSCContentBaseSourceTimeKey = &kSCContentBaseSourceTimeKey;
 static const void *kSCContentFrameTimelineTimeKey = &kSCContentFrameTimelineTimeKey;
+static const void *kSCContentPlaybackRateKey = &kSCContentPlaybackRateKey;
 static const void *kSCContentGenerationKey = &kSCContentGenerationKey;
-
-static BOOL SCSupportsDirectAVAudioFileRead(NSString *sourcePath) {
-    NSString *ext = sourcePath.pathExtension.lowercaseString;
-    if (ext.length == 0) {
-        return NO;
-    }
-
-    static NSSet<NSString *> *supportedExtensions;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        supportedExtensions = [NSSet setWithArray:@[
-            @"aac", @"aif", @"aiff", @"caf", @"flac", @"m4a", @"mp3", @"wav"
-        ]];
-    });
-
-    return [supportedExtensions containsObject:ext];
-}
 
 static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
     if ([scaleMode isEqualToString:@"fill"]) {
@@ -97,10 +78,7 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
         _activeLabel.text = @"No active layer";
         _textOverlayLabels = [NSMutableArray array];
         _visualGuideLayers = [NSMutableArray array];
-        _audioNodes = [NSMutableDictionary dictionary];
-        _audioFiles = [NSMutableDictionary dictionary];
-        _activeAudioClips = @[];
-        _activeAudioSignature = @"";
+        _audioTransportEngine = [[SCAudioTransportEngine alloc] init];
         _thumbnailQueue = dispatch_queue_create("space.iengpho.swiftcut.preview.thumbnail", DISPATCH_QUEUE_SERIAL);
         _baseVideoLayer = [CALayer layer];
         _baseVideoLayer.contentsGravity = kCAGravityResizeAspect;
@@ -136,8 +114,7 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
 }
 
 - (void)dealloc {
-    [self stopAndResetAudioNodes];
-    [_audioEngine stop];
+    [self.audioTransportEngine stop];
     [_displayLink invalidate];
 }
 
@@ -154,10 +131,8 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
     self.desiredPlaying = playing;
     if (!playing) {
         self.lastDisplayLinkTimestamp = 0.0;
-        [self pauseAudioNodes];
-    } else if (self.activeAudioClips.count > 0) {
-        [self synchronizeAudioTransport];
     }
+    [self.audioTransportEngine setDesiredPlaybackState:playing];
 
     [self notifyPlaybackStateIfNeeded];
 }
@@ -165,7 +140,7 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
 - (void)seekToTimeSeconds:(double)seconds {
     self.currentTimeSeconds = [self clampedTimeSeconds:seconds];
     self.lastDisplayLinkTimestamp = 0.0;
-    [self synchronizeAudioTransport];
+    [self.audioTransportEngine seekToTimeSeconds:self.currentTimeSeconds];
     [self updateBaseVideoFrameForDisplayTimeSeconds:self.currentTimeSeconds];
     [self updateOverlayContentLayersForDisplayTimeSeconds:self.currentTimeSeconds generation:_visualGeneration];
     if (self.onDisplayTimeChange != nil) {
@@ -254,7 +229,6 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
     _visualGeneration += 1;
     const NSUInteger generation = _visualGeneration;
     BOOL rendersPrimaryVideo = NO;
-    self.baseVideoLayer.contents = nil;
 
     for (CALayer *layer in self.visualGuideLayers) {
         [layer removeFromSuperlayer];
@@ -262,6 +236,8 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
     [self.visualGuideLayers removeAllObjects];
 
     if (overlays.count == 0) {
+        self.baseVideoLayer.contents = nil;
+        self.baseVideoLayer.hidden = YES;
         return;
     }
 
@@ -372,6 +348,7 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
         BOOL renderContent = [overlay[@"renderContent"] boolValue];
         NSNumber *sourceTimeSeconds = overlay[@"sourceTimeSeconds"];
         NSNumber *frameTimelineTimeSeconds = overlay[@"frameTimelineTimeSeconds"];
+        NSNumber *playbackRate = overlay[@"playbackRate"];
         if ([kind isEqualToString:@"video"] && renderContent && sourcePath.length > 0 && sourceTimeSeconds != nil) {
             objc_setAssociatedObject(self.baseVideoLayer, kSCContentSourcePathKey, sourcePath, OBJC_ASSOCIATION_COPY_NONATOMIC);
             objc_setAssociatedObject(self.baseVideoLayer, kSCContentBaseSourceTimeKey, sourceTimeSeconds, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -379,6 +356,12 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
                 self.baseVideoLayer,
                 kSCContentFrameTimelineTimeKey,
                 frameTimelineTimeSeconds != nil ? frameTimelineTimeSeconds : sourceTimeSeconds,
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            );
+            objc_setAssociatedObject(
+                self.baseVideoLayer,
+                kSCContentPlaybackRateKey,
+                playbackRate != nil ? playbackRate : @(1.0),
                 OBJC_ASSOCIATION_RETAIN_NONATOMIC
             );
             objc_setAssociatedObject(
@@ -414,6 +397,12 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
             );
             objc_setAssociatedObject(
                 contentLayer,
+                kSCContentPlaybackRateKey,
+                playbackRate != nil ? playbackRate : @(1.0),
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            );
+            objc_setAssociatedObject(
+                contentLayer,
                 kSCContentGenerationKey,
                 @(generation),
                 OBJC_ASSOCIATION_RETAIN_NONATOMIC
@@ -437,15 +426,7 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
 }
 
 - (void)updateActiveAudioClips:(NSArray<NSDictionary *> * _Nullable)clips {
-    NSArray<NSDictionary *> *payloads = clips ?: @[];
-    NSString *signature = [self.class audioSignatureForPayloads:payloads];
-    BOOL didChange = ![signature isEqualToString:self.activeAudioSignature];
-    self.activeAudioClips = payloads;
-    self.activeAudioSignature = signature;
-
-    if (didChange || payloads.count == 0) {
-        [self synchronizeAudioTransport];
-    }
+    [self.audioTransportEngine updateActiveAudioClips:clips ?: @[]];
 }
 
 - (void)didMoveToWindow {
@@ -483,7 +464,7 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
             if (self.previewDurationSeconds > 0.0 && self.currentTimeSeconds >= self.previewDurationSeconds) {
                 self.currentTimeSeconds = self.previewDurationSeconds;
                 self.desiredPlaying = NO;
-                [self pauseAudioNodes];
+                [self.audioTransportEngine setDesiredPlaybackState:NO];
             }
         }
         self.lastDisplayLinkTimestamp = timestamp;
@@ -582,22 +563,24 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
     NSString *sourcePath = objc_getAssociatedObject(self.baseVideoLayer, kSCContentSourcePathKey);
     NSNumber *baseSourceTime = objc_getAssociatedObject(self.baseVideoLayer, kSCContentBaseSourceTimeKey);
     NSNumber *frameTimelineTime = objc_getAssociatedObject(self.baseVideoLayer, kSCContentFrameTimelineTimeKey);
+    NSNumber *playbackRate = objc_getAssociatedObject(self.baseVideoLayer, kSCContentPlaybackRateKey);
     NSNumber *generation = objc_getAssociatedObject(self.baseVideoLayer, kSCContentGenerationKey);
     if (
         self.baseVideoLayer.hidden ||
         sourcePath.length == 0 ||
         baseSourceTime == nil ||
         frameTimelineTime == nil ||
+        playbackRate == nil ||
         generation == nil
     ) {
         return;
     }
 
     const double timelineDelta = displayTimeSeconds - frameTimelineTime.doubleValue;
-    if (!isfinite(timelineDelta) || !isfinite(baseSourceTime.doubleValue)) {
+    if (!isfinite(timelineDelta) || !isfinite(baseSourceTime.doubleValue) || !isfinite(playbackRate.doubleValue)) {
         return;
     }
-    const double sourceTimeSeconds = MAX(0.0, baseSourceTime.doubleValue + timelineDelta);
+    const double sourceTimeSeconds = MAX(0.0, baseSourceTime.doubleValue + (timelineDelta * playbackRate.doubleValue));
     [self loadThumbnailForSourcePath:sourcePath
                    sourceTimeSeconds:sourceTimeSeconds
                            intoLayer:self.baseVideoLayer
@@ -620,15 +603,16 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
             NSString *sourcePath = objc_getAssociatedObject(sublayer, kSCContentSourcePathKey);
             NSNumber *baseSourceTime = objc_getAssociatedObject(sublayer, kSCContentBaseSourceTimeKey);
             NSNumber *frameTimelineTime = objc_getAssociatedObject(sublayer, kSCContentFrameTimelineTimeKey);
-            if (sourcePath.length == 0 || baseSourceTime == nil || frameTimelineTime == nil) {
+            NSNumber *playbackRate = objc_getAssociatedObject(sublayer, kSCContentPlaybackRateKey);
+            if (sourcePath.length == 0 || baseSourceTime == nil || frameTimelineTime == nil || playbackRate == nil) {
                 continue;
             }
 
             const double timelineDelta = displayTimeSeconds - frameTimelineTime.doubleValue;
-            if (!isfinite(timelineDelta) || !isfinite(baseSourceTime.doubleValue)) {
+            if (!isfinite(timelineDelta) || !isfinite(baseSourceTime.doubleValue) || !isfinite(playbackRate.doubleValue)) {
                 continue;
             }
-            const double sourceTimeSeconds = MAX(0.0, baseSourceTime.doubleValue + timelineDelta);
+            const double sourceTimeSeconds = MAX(0.0, baseSourceTime.doubleValue + (timelineDelta * playbackRate.doubleValue));
             [self loadThumbnailForSourcePath:sourcePath
                            sourceTimeSeconds:sourceTimeSeconds
                                    intoLayer:sublayer
@@ -647,147 +631,6 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
         return lowerBound;
     }
     return MIN(lowerBound, self.previewDurationSeconds);
-}
-
-- (void)synchronizeAudioTransport {
-    [self stopAndResetAudioNodes];
-
-    if (self.activeAudioClips.count == 0) {
-        return;
-    }
-
-    if (![self ensureAudioEngineStarted]) {
-        return;
-    }
-
-    for (NSDictionary *clip in self.activeAudioClips) {
-        NSString *clipId = clip[@"clipId"];
-        NSString *sourcePath = clip[@"sourcePath"];
-        NSNumber *sourceTimeSeconds = clip[@"sourceTimeSeconds"];
-        NSNumber *remainingDurationSeconds = clip[@"remainingDurationSeconds"];
-        NSNumber *volume = clip[@"volume"];
-        NSNumber *muted = clip[@"muted"];
-
-        if (
-            clipId.length == 0 ||
-            sourcePath.length == 0 ||
-            sourceTimeSeconds == nil ||
-            remainingDurationSeconds == nil ||
-            !SCSupportsDirectAVAudioFileRead(sourcePath)
-        ) {
-            continue;
-        }
-
-        NSError *error = nil;
-        AVAudioFile *audioFile = [[AVAudioFile alloc] initForReading:[NSURL fileURLWithPath:sourcePath] error:&error];
-        if (audioFile == nil || error != nil) {
-            continue;
-        }
-
-        const AVAudioFramePosition startingFrame = MAX(
-            0,
-            (AVAudioFramePosition)llround(sourceTimeSeconds.doubleValue * audioFile.processingFormat.sampleRate)
-        );
-        const AVAudioFramePosition availableFrames = MAX(0, audioFile.length - startingFrame);
-        const AVAudioFramePosition requestedFrames = MAX(
-            0,
-            (AVAudioFramePosition)llround(remainingDurationSeconds.doubleValue * audioFile.processingFormat.sampleRate)
-        );
-        const AVAudioFrameCount frameCount = (AVAudioFrameCount)MIN(availableFrames, requestedFrames);
-        if (frameCount == 0) {
-            continue;
-        }
-
-        AVAudioPlayerNode *playerNode = [[AVAudioPlayerNode alloc] init];
-        playerNode.volume = muted.boolValue ? 0.0f : (volume != nil ? volume.floatValue : 1.0f);
-        [self.audioEngine attachNode:playerNode];
-        [self.audioEngine connect:playerNode to:self.audioEngine.mainMixerNode format:audioFile.processingFormat];
-        [playerNode scheduleSegment:audioFile
-                      startingFrame:startingFrame
-                         frameCount:frameCount
-                             atTime:nil
-                  completionHandler:nil];
-        self.audioNodes[clipId] = playerNode;
-        self.audioFiles[clipId] = audioFile;
-    }
-
-    if (self.desiredPlaying) {
-        [self playAudioNodes];
-    }
-}
-
-- (BOOL)configureAudioSession {
-    AVAudioSession *session = [AVAudioSession sharedInstance];
-    NSError *error = nil;
-    if (![session setCategory:AVAudioSessionCategoryPlayback
-                  withOptions:AVAudioSessionCategoryOptionMixWithOthers
-                        error:&error]) {
-        return NO;
-    }
-
-    error = nil;
-    if (![session setActive:YES error:&error]) {
-        return NO;
-    }
-
-    return session.currentRoute.outputs.count > 0;
-}
-
-- (BOOL)ensureAudioEngineStarted {
-    if (self.audioEngine == nil) {
-        self.audioEngine = [[AVAudioEngine alloc] init];
-    }
-
-    if (self.audioEngine.isRunning) {
-        return YES;
-    }
-
-    if (![self configureAudioSession]) {
-        return NO;
-    }
-
-    NSError *error = nil;
-    @try {
-        (void)self.audioEngine.outputNode;
-        [self.audioEngine startAndReturnError:&error];
-    } @catch (NSException *exception) {
-        return NO;
-    }
-    return error == nil && self.audioEngine.isRunning;
-}
-
-- (void)stopAndResetAudioNodes {
-    if (self.audioEngine == nil) {
-        [self.audioNodes removeAllObjects];
-        return;
-    }
-
-    for (AVAudioPlayerNode *node in self.audioNodes.objectEnumerator) {
-        [node stop];
-        [self.audioEngine detachNode:node];
-    }
-    [self.audioNodes removeAllObjects];
-    [self.audioFiles removeAllObjects];
-    [self.audioEngine reset];
-}
-
-- (void)pauseAudioNodes {
-    for (AVAudioPlayerNode *node in self.audioNodes.objectEnumerator) {
-        if (node.isPlaying) {
-            [node pause];
-        }
-    }
-}
-
-- (void)playAudioNodes {
-    if (![self ensureAudioEngineStarted]) {
-        return;
-    }
-    for (AVAudioPlayerNode *node in self.audioNodes.objectEnumerator) {
-        if (!node.isPlaying) {
-            [node play];
-        }
-    }
 }
 
 - (void)loadThumbnailForSourcePath:(NSString *)sourcePath
@@ -944,22 +787,6 @@ static NSString *SCContentsGravityForScaleMode(NSString *scaleMode) {
 
 + (double)previewFrameStep {
     return 1.0 / 24.0;
-}
-
-+ (NSString *)audioSignatureForPayloads:(NSArray<NSDictionary *> *)payloads {
-    if (payloads.count == 0) {
-        return @"";
-    }
-
-    NSMutableArray<NSString *> *components = [NSMutableArray arrayWithCapacity:payloads.count];
-    for (NSDictionary *clip in payloads) {
-        NSString *clipId = clip[@"clipId"] ?: @"";
-        NSString *sourcePath = clip[@"sourcePath"] ?: @"";
-        NSNumber *volume = clip[@"volume"] ?: @1.0;
-        NSNumber *muted = clip[@"muted"] ?: @NO;
-        [components addObject:[NSString stringWithFormat:@"%@|%@|%.3f|%@", clipId, sourcePath, volume.doubleValue, muted.boolValue ? @"1" : @"0"]];
-    }
-    return [components componentsJoinedByString:@","];
 }
 
 @end

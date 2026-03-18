@@ -223,22 +223,33 @@ struct TimelineToolButton: View {
 struct TimelineBottomToolButton: View {
     let icon: String
     let title: String
+    let isLoading: Bool
+    let isEnabled: Bool
     let action: () -> Void
     
     var body: some View {
         Button(action: action) {
             VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 22))
-                    .foregroundColor(.white)
+                if isLoading {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                        .scaleEffect(0.85)
+                        .frame(height: 22)
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 22))
+                        .foregroundColor(isEnabled ? .white : .gray)
+                }
                 
                 Text(title)
                     .font(.system(size: 10))
-                    .foregroundColor(.gray)
+                    .foregroundColor(isEnabled ? .gray : .gray.opacity(0.6))
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
         }
+        .disabled(!isEnabled || isLoading)
     }
 }
 
@@ -648,8 +659,8 @@ private struct ClipView: View {
             Rectangle()
                 .stroke(isSelected ? Color.orange.opacity(0.85) : Color.clear, lineWidth: 2)
         )
-        .task(id: "\(clip.type)-\(clip.sourcePath)") {
-            guard clip.type == .video, expandsVideoAudio else {
+        .task(id: "\(clip.type)-\(clip.sourcePath)-\(clip.showsEmbeddedWaveform)") {
+            guard clip.type == .video, expandsVideoAudio, clip.showsEmbeddedWaveform else {
                 showsEmbeddedAudio = false
                 return
             }
@@ -664,7 +675,7 @@ private struct ClipView: View {
             AudioWaveformStrip(sourcePath: clip.sourcePath)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 7)
-        case .video where expandsVideoAudio && showsEmbeddedAudio:
+        case .video where expandsVideoAudio && clip.showsEmbeddedWaveform && showsEmbeddedAudio:
             VStack(spacing: 1) {
                 TimelineClipThumbnailStrip(
                     sourcePath: clip.sourcePath,
@@ -714,9 +725,7 @@ private struct ClipView: View {
     private var clipLeadingVisual: some View {
         switch clip.type {
         case .audio:
-            Image(systemName: "waveform")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(.white.opacity(0.85))
+            EmptyView()
         case .video:
             Image(systemName: "film")
                 .font(.system(size: 10, weight: .semibold))
@@ -747,11 +756,11 @@ private struct ClipView: View {
     }
 
     private var clipHeight: CGFloat {
-        clip.type == .video && expandsVideoAudio && showsEmbeddedAudio ? 56 : 36
+        clip.type == .video && expandsVideoAudio && clip.showsEmbeddedWaveform && showsEmbeddedAudio ? 56 : 36
     }
 
     private var overlayTopPadding: CGFloat {
-        clip.type == .video && expandsVideoAudio && showsEmbeddedAudio ? 2 : 0
+        clip.type == .video && expandsVideoAudio && clip.showsEmbeddedWaveform && showsEmbeddedAudio ? 2 : 0
     }
 }
 
@@ -823,9 +832,10 @@ struct AudioWaveformStrip: View {
         GeometryReader { geometry in
             let targetBarCount = max(Int(geometry.size.width / 6), 18)
             let visibleSamples = samples.isEmpty
-                ? Array(repeating: CGFloat(0.35), count: targetBarCount)
+                ? Array(repeating: CGFloat(0), count: targetBarCount)
                 : samples
             let barWidth = max((geometry.size.width / CGFloat(max(visibleSamples.count, 1))) - 1.5, 2)
+            let maxBarHeight = max(geometry.size.height - 2, 1)
 
             HStack(alignment: .center, spacing: 1.5) {
                 ForEach(Array(visibleSamples.enumerated()), id: \.offset) { _, sample in
@@ -833,7 +843,7 @@ struct AudioWaveformStrip: View {
                         .fill(Color.white.opacity(0.88))
                         .frame(
                             width: barWidth,
-                            height: max(4, geometry.size.height * max(sample, 0.14))
+                            height: max(2, maxBarHeight * max(sample, 0))
                         )
                 }
             }
@@ -849,33 +859,11 @@ struct AudioWaveformStrip: View {
 }
 
 private enum TimelineClipVisualCache {
-    private static let thumbnailCache = NSCache<NSString, UIImage>()
-    private static let thumbnailStripCache = NSCache<NSString, NSArray>()
-    private static let waveformCache = NSCache<NSString, NSArray>()
-    private static let audioPresenceCache = NSCache<NSString, NSNumber>()
+    private static let videoEngine: NativeVideoEngineProtocol = NativeVideoEngine.shared
+    private static let audioEngine: NativeAudioEngineProtocol = NativeAudioEngine.shared
 
     static func thumbnail(for sourcePath: String) async -> UIImage? {
-        guard !sourcePath.isEmpty else { return nil }
-
-        if let cached = thumbnailCache.object(forKey: sourcePath as NSString) {
-            return cached
-        }
-
-        return await Task<UIImage?, Never>.detached(priority: .utility) {
-            let url = URL(fileURLWithPath: sourcePath)
-            let asset = AVAsset(url: url)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-
-            let time = CMTime(seconds: 0.1, preferredTimescale: 600)
-            guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else {
-                return nil
-            }
-
-            let image = UIImage(cgImage: cgImage)
-            thumbnailCache.setObject(image, forKey: sourcePath as NSString)
-            return image
-        }.value
+        await videoEngine.thumbnail(for: sourcePath)
     }
 
     static func thumbnailStrip(
@@ -883,173 +871,22 @@ private enum TimelineClipVisualCache {
         durationSeconds: Double,
         frameCount: Int
     ) async -> [UIImage] {
-        guard !sourcePath.isEmpty else { return [] }
-
-        let sanitizedFrameCount = max(frameCount, 1)
-        let cacheKey = "\(sourcePath)#\(Int(durationSeconds * 100))#\(sanitizedFrameCount)" as NSString
-
-        if let cached = thumbnailStripCache.object(forKey: cacheKey) as? [UIImage] {
-            return cached
-        }
-
-        return await Task<[UIImage], Never>.detached(priority: .utility) {
-            let url = URL(fileURLWithPath: sourcePath)
-            let asset = AVURLAsset(url: url)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 160, height: 160)
-
-            let assetDuration = max(durationSeconds, 0.1)
-            let times = (0..<sanitizedFrameCount).map { index -> CMTime in
-                let progress = sanitizedFrameCount == 1
-                    ? 0.0
-                    : Double(index) / Double(sanitizedFrameCount - 1)
-                let second = min(assetDuration * progress, max(assetDuration - 0.01, 0))
-                return CMTime(seconds: second, preferredTimescale: 600)
-            }
-
-            var generatedImages: [UIImage] = []
-            for time in times {
-                if let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) {
-                    generatedImages.append(UIImage(cgImage: cgImage))
-                }
-            }
-
-            if generatedImages.isEmpty, let fallback = thumbnailCache.object(forKey: sourcePath as NSString) {
-                generatedImages = [fallback]
-            } else if generatedImages.isEmpty,
-                      let fallback = await thumbnail(for: sourcePath) {
-                generatedImages = [fallback]
-            }
-
-            thumbnailStripCache.setObject(generatedImages as NSArray, forKey: cacheKey)
-            return generatedImages
-        }.value
+        await videoEngine.thumbnailStrip(
+            for: sourcePath,
+            durationSeconds: durationSeconds,
+            frameCount: frameCount
+        )
     }
 
     static func waveform(for sourcePath: String, targetBarCount: Int) async -> [CGFloat] {
-        guard !sourcePath.isEmpty else { return [] }
-        let resolvedBarCount = max(targetBarCount, 1)
-        let cacheKey = "\(sourcePath)#waveform#\(resolvedBarCount)" as NSString
-
-        if let cached = waveformCache.object(forKey: cacheKey) as? [NSNumber] {
-            return cached.map { CGFloat(truncating: $0) }
-        }
-
-        return await Task<[CGFloat], Never>.detached(priority: .utility) {
-            let values = generateWaveformSamples(
-                sourcePath: sourcePath,
-                targetBarCount: resolvedBarCount
-            )
-            waveformCache.setObject(values.map(NSNumber.init(value:)) as NSArray, forKey: cacheKey)
-            return values.map { CGFloat($0) }
-        }.value
+        await audioEngine.waveformSamples(
+            for: sourcePath,
+            targetBarCount: targetBarCount
+        )
     }
 
     static func hasAudioTrack(for sourcePath: String) async -> Bool {
-        guard !sourcePath.isEmpty else { return false }
-
-        if let cached = audioPresenceCache.object(forKey: sourcePath as NSString) {
-            return cached.boolValue
-        }
-
-        return await Task<Bool, Never>.detached(priority: .utility) {
-            let asset = AVURLAsset(url: URL(fileURLWithPath: sourcePath))
-            let hasAudio = !asset.tracks(withMediaType: .audio).isEmpty
-            audioPresenceCache.setObject(NSNumber(value: hasAudio), forKey: sourcePath as NSString)
-            return hasAudio
-        }.value
-    }
-
-    private static func generateWaveformSamples(sourcePath: String, targetBarCount: Int) -> [Double] {
-        let url = URL(fileURLWithPath: sourcePath)
-        let asset = AVURLAsset(url: url)
-        guard let track = asset.tracks(withMediaType: .audio).first,
-              let reader = try? AVAssetReader(asset: asset) else {
-            return []
-        }
-
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsNonInterleaved: false
-        ]
-
-        let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
-        output.alwaysCopiesSampleData = false
-
-        guard reader.canAdd(output) else {
-            return []
-        }
-
-        reader.add(output)
-        guard reader.startReading() else {
-            return []
-        }
-
-        var amplitudes: [Double] = []
-        let sampleStride = 1024
-
-        while let sampleBuffer = output.copyNextSampleBuffer(),
-              let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
-            let length = CMBlockBufferGetDataLength(blockBuffer)
-            var data = Data(repeating: 0, count: length)
-
-            data.withUnsafeMutableBytes { bytes in
-                guard let baseAddress = bytes.baseAddress else { return }
-                CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: baseAddress)
-            }
-
-            data.withUnsafeBytes { bytes in
-                guard let samples = bytes.bindMemory(to: Int16.self).baseAddress else { return }
-                let count = length / MemoryLayout<Int16>.size
-                guard count > 0 else { return }
-
-                var index = 0
-                while index < count {
-                    let end = min(index + sampleStride, count)
-                    var peak = 0.0
-
-                    for sampleIndex in index..<end {
-                        let value = Double(abs(Int(samples[sampleIndex])))
-                        peak = max(peak, value / Double(Int16.max))
-                    }
-
-                    amplitudes.append(peak)
-                    index = end
-                }
-            }
-
-            CMSampleBufferInvalidate(sampleBuffer)
-        }
-
-        guard !amplitudes.isEmpty else { return [] }
-
-        let bucketSize = max(amplitudes.count / targetBarCount, 1)
-        var buckets: [Double] = []
-        var bucketIndex = 0
-
-        while bucketIndex < amplitudes.count {
-            let end = min(bucketIndex + bucketSize, amplitudes.count)
-            let bucket = amplitudes[bucketIndex..<end]
-            let peak = bucket.max() ?? 0
-            let average = bucket.reduce(0, +) / Double(bucket.count)
-            let shapedValue = max(average * 0.85, peak * 0.55)
-            buckets.append(max(0.14, min(pow(shapedValue, 0.8) * 1.35, 1.0)))
-            bucketIndex = end
-        }
-
-        if buckets.count > targetBarCount {
-            return Array(buckets.prefix(targetBarCount))
-        }
-
-        if buckets.count < targetBarCount {
-            return buckets + Array(repeating: 0.16, count: targetBarCount - buckets.count)
-        }
-
-        return buckets
+        await audioEngine.hasAudioTrack(for: sourcePath)
     }
 }
 

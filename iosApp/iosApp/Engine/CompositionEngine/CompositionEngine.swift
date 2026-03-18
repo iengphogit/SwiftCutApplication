@@ -8,6 +8,7 @@ protocol CompositionEngineProtocol {
 
 struct CompositionEngine: CompositionEngineProtocol {
     func evaluate(timeline: Timeline, at time: CMTime) -> CompositionFrame {
+        let hasSoloAudioTrack = timeline.tracks.contains { $0.type == .audio && $0.isSolo }
         let visualClips = timeline.tracks
             .sorted { $0.layer < $1.layer }
             .flatMap { track in
@@ -15,7 +16,12 @@ struct CompositionEngine: CompositionEngineProtocol {
             }
 
         let audioClips = timeline.tracks
-            .filter { $0.type == .audio && !$0.isMuted }
+            .filter { track in
+                guard track.type == .audio, !track.isMuted else {
+                    return false
+                }
+                return !hasSoloAudioTrack || track.isSolo
+            }
             .flatMap { track in
                 activeAudioClips(in: track, at: time)
             }
@@ -55,10 +61,14 @@ private extension CompositionEngine {
                     id: audioClip.id,
                     trackId: track.id,
                     timelineRange: audioClip.timelineRange,
+                    sourceStartSeconds: audioClip.sourceRange.start.seconds,
                     sourceTimeSeconds: sourceTime(for: audioClip, timelineTime: time).seconds,
                     sourceURL: audioClip.sourceUrl,
                     volume: audioClip.volume,
-                    isMuted: track.isMuted
+                    trackVolume: track.volume,
+                    effectiveVolume: max(audioClip.volume * track.volume, 0),
+                    isMuted: track.isMuted,
+                    isTrackSolo: track.isSolo
                 )
             }
     }
@@ -76,6 +86,7 @@ private extension CompositionEngine {
                 trackLayer: track.layer,
                 timelineRange: videoClip.timelineRange,
                 sourceTimeSeconds: sourceTime(for: videoClip, timelineTime: time).seconds,
+                playbackRate: videoClip.clampedSpeed,
                 sourceURL: videoClip.sourceUrl,
                 kind: .video,
                 transform: CompositionTransform(
@@ -96,6 +107,7 @@ private extension CompositionEngine {
                 trackLayer: track.layer,
                 timelineRange: overlayClip.timelineRange,
                 sourceTimeSeconds: sourceTime(for: overlayClip, timelineTime: time).seconds,
+                playbackRate: 1.0,
                 sourceURL: overlayClip.sourceUrl,
                 kind: .overlay,
                 transform: CompositionTransform(
@@ -116,6 +128,7 @@ private extension CompositionEngine {
                 trackLayer: track.layer,
                 timelineRange: textClip.timelineRange,
                 sourceTimeSeconds: sourceTime(for: textClip, timelineTime: time).seconds,
+                playbackRate: 1.0,
                 sourceURL: nil,
                 kind: .text,
                 transform: CompositionTransform(
