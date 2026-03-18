@@ -7,8 +7,10 @@
 @property (nonatomic, strong) AVAudioEngine *audioEngine;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, AVAudioPlayerNode *> *audioNodes;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, AVAudioFile *> *audioFiles;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *resolvedAudioSourceCache;
 @property (nonatomic, copy) NSArray<NSDictionary *> *activeAudioClips;
 @property (nonatomic, copy) NSString *activeAudioSignature;
+@property (nonatomic, copy) NSString *activeAudioStructureSignature;
 @property (nonatomic, assign, readwrite, getter=isPlaying) BOOL playing;
 @property (nonatomic, assign) double currentTimeSeconds;
 
@@ -38,8 +40,10 @@ static BOOL SCAudioClipSupportsDirectAVAudioFileRead(NSString *sourcePath) {
     if (self) {
         _audioNodes = [NSMutableDictionary dictionary];
         _audioFiles = [NSMutableDictionary dictionary];
+        _resolvedAudioSourceCache = [NSMutableDictionary dictionary];
         _activeAudioClips = @[];
         _activeAudioSignature = @"";
+        _activeAudioStructureSignature = @"";
         _playing = NO;
         _currentTimeSeconds = 0.0;
     }
@@ -74,13 +78,18 @@ static BOOL SCAudioClipSupportsDirectAVAudioFileRead(NSString *sourcePath) {
 - (void)updateActiveAudioClips:(NSArray<NSDictionary *> * _Nullable)clips {
     NSArray<NSDictionary *> *payloads = clips ?: @[];
     NSString *signature = [self.class audioSignatureForPayloads:payloads];
-    BOOL didChange = ![signature isEqualToString:self.activeAudioSignature];
+    NSString *structureSignature = [self.class audioStructureSignatureForPayloads:payloads];
+    BOOL didPayloadChange = ![signature isEqualToString:self.activeAudioSignature];
+    BOOL didStructureChange = ![structureSignature isEqualToString:self.activeAudioStructureSignature];
 
     self.activeAudioClips = payloads;
     self.activeAudioSignature = signature;
+    self.activeAudioStructureSignature = structureSignature;
 
-    if (didChange || payloads.count == 0) {
+    if (didStructureChange || payloads.count == 0) {
         [self synchronizeAudioTransport];
+    } else if (didPayloadChange) {
+        [self applyLiveAudioNodeState];
     }
 }
 
@@ -88,6 +97,24 @@ static BOOL SCAudioClipSupportsDirectAVAudioFileRead(NSString *sourcePath) {
     self.playing = NO;
     [self stopAndResetAudioNodes];
     [self.audioEngine stop];
+}
+
+- (void)applyLiveAudioNodeState {
+    for (NSDictionary *clip in self.activeAudioClips) {
+        NSString *clipId = clip[@"clipId"];
+        if (clipId.length == 0) {
+            continue;
+        }
+
+        AVAudioPlayerNode *playerNode = self.audioNodes[clipId];
+        if (playerNode == nil) {
+            continue;
+        }
+
+        NSNumber *volume = clip[@"volume"];
+        NSNumber *muted = clip[@"muted"];
+        playerNode.volume = muted.boolValue ? 0.0f : (volume != nil ? volume.floatValue : 1.0f);
+    }
 }
 
 - (void)synchronizeAudioTransport {
@@ -103,7 +130,7 @@ static BOOL SCAudioClipSupportsDirectAVAudioFileRead(NSString *sourcePath) {
 
     for (NSDictionary *clip in self.activeAudioClips) {
         NSString *clipId = clip[@"clipId"];
-        NSString *sourcePath = clip[@"sourcePath"];
+        NSString *sourcePath = [self resolvedPlayableAudioSourcePathForSourcePath:clip[@"sourcePath"]];
         NSNumber *sourceStartSeconds = clip[@"sourceStartSeconds"];
         NSNumber *timelineStartSeconds = clip[@"timelineStartSeconds"];
         NSNumber *timelineDurationSeconds = clip[@"timelineDurationSeconds"];
@@ -115,8 +142,7 @@ static BOOL SCAudioClipSupportsDirectAVAudioFileRead(NSString *sourcePath) {
             sourcePath.length == 0 ||
             sourceStartSeconds == nil ||
             timelineStartSeconds == nil ||
-            timelineDurationSeconds == nil ||
-            !SCAudioClipSupportsDirectAVAudioFileRead(sourcePath)
+            timelineDurationSeconds == nil
         ) {
             continue;
         }
@@ -227,6 +253,73 @@ static BOOL SCAudioClipSupportsDirectAVAudioFileRead(NSString *sourcePath) {
     [self.audioEngine reset];
 }
 
+- (NSString *)resolvedPlayableAudioSourcePathForSourcePath:(NSString *)sourcePath {
+    if (sourcePath.length == 0) {
+        return @"";
+    }
+
+    NSString *cachedResolvedPath = self.resolvedAudioSourceCache[sourcePath];
+    if (cachedResolvedPath.length > 0 && SCAudioClipSupportsDirectAVAudioFileRead(cachedResolvedPath)) {
+        return cachedResolvedPath;
+    }
+
+    if (SCAudioClipSupportsDirectAVAudioFileRead(sourcePath)) {
+        self.resolvedAudioSourceCache[sourcePath] = sourcePath;
+        return sourcePath;
+    }
+
+    NSString *extractedPath = [self exportEmbeddedAudioToM4AForSourcePath:sourcePath];
+    if (extractedPath.length > 0 && SCAudioClipSupportsDirectAVAudioFileRead(extractedPath)) {
+        self.resolvedAudioSourceCache[sourcePath] = extractedPath;
+        return extractedPath;
+    }
+
+    return @"";
+}
+
+- (NSString *)exportEmbeddedAudioToM4AForSourcePath:(NSString *)sourcePath {
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:sourcePath] options:nil];
+    if ([asset tracksWithMediaType:AVMediaTypeAudio].count == 0) {
+        return @"";
+    }
+
+    NSString *cacheDirectory = [NSTemporaryDirectory() stringByAppendingPathComponent:@"SwiftCutAudioTransportCache"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:cacheDirectory
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+
+    NSString *safeName = [NSString stringWithFormat:@"%lu.m4a", (unsigned long)sourcePath.hash];
+    NSString *outputPath = [cacheDirectory stringByAppendingPathComponent:safeName];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:outputPath]) {
+        return outputPath;
+    }
+
+    AVAssetExportSession *exportSession = [[AVAssetExportSession alloc] initWithAsset:asset
+                                                                            presetName:AVAssetExportPresetAppleM4A];
+    if (exportSession == nil) {
+        return @"";
+    }
+
+    exportSession.outputURL = [NSURL fileURLWithPath:outputPath];
+    exportSession.outputFileType = AVFileTypeAppleM4A;
+    exportSession.timeRange = CMTimeRangeMake(kCMTimeZero, asset.duration);
+    exportSession.shouldOptimizeForNetworkUse = NO;
+
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    [exportSession exportAsynchronouslyWithCompletionHandler:^{
+        dispatch_semaphore_signal(semaphore);
+    }];
+    dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+
+    if (exportSession.status == AVAssetExportSessionStatusCompleted) {
+        return outputPath;
+    }
+
+    [[NSFileManager defaultManager] removeItemAtPath:outputPath error:nil];
+    return @"";
+}
+
 - (void)pauseAudioNodes {
     for (AVAudioPlayerNode *node in self.audioNodes.objectEnumerator) {
         if (node.isPlaying) {
@@ -269,6 +362,29 @@ static BOOL SCAudioClipSupportsDirectAVAudioFileRead(NSString *sourcePath) {
             timelineDurationSeconds,
             volume,
             muted ? @"1" : @"0"]];
+    }
+
+    return [components componentsJoinedByString:@"#"];
+}
+
++ (NSString *)audioStructureSignatureForPayloads:(NSArray<NSDictionary *> *)payloads {
+    if (payloads.count == 0) {
+        return @"";
+    }
+
+    NSMutableArray<NSString *> *components = [NSMutableArray arrayWithCapacity:payloads.count];
+    for (NSDictionary *clip in payloads) {
+        NSString *clipId = clip[@"clipId"] ?: @"";
+        NSString *sourcePath = clip[@"sourcePath"] ?: @"";
+        double sourceStartSeconds = [clip[@"sourceStartSeconds"] doubleValue];
+        double timelineStartSeconds = [clip[@"timelineStartSeconds"] doubleValue];
+        double timelineDurationSeconds = [clip[@"timelineDurationSeconds"] doubleValue];
+        [components addObject:[NSString stringWithFormat:@"%@|%@|%.4f|%.4f|%.4f",
+            clipId,
+            sourcePath,
+            sourceStartSeconds,
+            timelineStartSeconds,
+            timelineDurationSeconds]];
     }
 
     return [components componentsJoinedByString:@"#"];

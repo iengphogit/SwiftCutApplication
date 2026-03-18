@@ -9,10 +9,10 @@ Use this section as the quick resume point before reading the detailed phases be
 ### Overall Progress
 - Timeline UI and interaction model: `78%`
 - Preview/video engine path: `62%`
-- Audio engine path: `55%`
-- Waveform analysis path: `78%`
-- Native timeline bridge parity: `64%`
-- End-to-end editor happy flow: `74%`
+- Audio engine path: `60%`
+- Waveform analysis path: `80%`
+- Native timeline bridge parity: `66%`
+- End-to-end editor happy flow: `78%`
 
 ### Done
 - [x] Centered playhead timeline model restored
@@ -36,6 +36,11 @@ Use this section as the quick resume point before reading the detailed phases be
 - [x] After extraction, the new audio lane appears below the main video lane
 - [x] Video and extracted audio tracks now behave as fully independent tracks
 - [x] Real capsule waveform bars now use decoded sample-data amplitude instead of placeholder shaping
+- [x] Audio `Volume` sub-mode added with `Back | slider | percent`
+- [x] Live clip volume now uses preview-only updates during drag and commits on release
+- [x] Audio transport now updates live node volume without full rescheduling for level-only changes
+- [x] Embedded video audio now participates in the same audio composition path before extraction
+- [x] Clip selection behavior stabilized so media content and selection stroke do not intentionally rebuild together
 
 ### In Progress
 - [ ] Native audio playback is still not verified audible on device
@@ -43,16 +48,15 @@ Use this section as the quick resume point before reading the detailed phases be
 - [ ] Native snapshot rebuild path still needs broader device validation after the latest bridge changes
 - [ ] Preview playback after zoom changes needs another real-device pass
 - [ ] Extracted audio clip duration and playback smoothness still need device verification against the ruler
+- [ ] Clip selection highlight still needs broad device verification against visual flashing regressions
 
 ### Next
 - [ ] Verify audible playback on real device with an extracted audio track
 - [ ] Log and inspect whether active audio clips are reaching `SCAudioTransportEngine`
 - [ ] Add track volume/solo controls to UI once native bridge path is verified
 - [ ] Add clip volume/mute controls to contextual tools
-- [ ] Add audio `Volume` contextual sub-mode: `Back | volume slider | percent`
-- [ ] Route audio clip volume slider updates into `NativeAudioEngine`
-- [ ] Persist clip volume through native snapshot rebuilds and timeline reloads
-- [ ] Verify live volume changes stay smooth during playback and scrubbing
+- [ ] Verify clip volume persists correctly after full reload and native snapshot rebuild
+- [ ] Apply the same preview-only drag / commit-on-release pattern to speed, opacity, and fades
 - [ ] Verify extracted audio clip timing/length matches the source video clip exactly after a fresh extract
 - [ ] Reintroduce coordinated vertical scrolling for many tracks only after audio playback is stable
 

@@ -45,6 +45,8 @@ class TimelineEditorViewModel: ObservableObject {
     private let compositionEngine = CompositionEngine()
     private var cancellables = Set<AnyCancellable>()
     private var loadedProjectId: UUID?
+    private var isPerformingLiveParameterEdit = false
+    private var liveClipVolumeOverrides: [UUID: Float] = [:]
 
     enum ImportDestination {
         case video
@@ -68,7 +70,14 @@ class TimelineEditorViewModel: ObservableObject {
         engine.timelinePublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.refreshDisplay()
+                guard let self else { return }
+                if self.isPerformingLiveParameterEdit {
+                    self.canUndo = self.nativeEditorEngine.canUndo
+                    self.canRedo = self.nativeEditorEngine.canRedo
+                    self.refreshCompositionFrame(at: self.currentTime)
+                } else {
+                    self.refreshDisplay()
+                }
             }
             .store(in: &cancellables)
         
@@ -520,14 +529,17 @@ class TimelineEditorViewModel: ObservableObject {
     }
 
     func setTrackVolume(_ trackId: UUID, volume: Float) {
-        if nativeEditorEngine.setTrackVolume(id: trackId, volume: volume) {
-            applyNativeSnapshotToSwiftTimeline()
-            refreshDisplay()
-            return
-        }
-
+        isPerformingLiveParameterEdit = true
         engine.setTrackVolume(trackId, volume: volume)
-        refreshDisplay()
+        let didUpdateNatively = nativeEditorEngine.setTrackVolume(id: trackId, volume: volume)
+        canUndo = nativeEditorEngine.canUndo
+        canRedo = nativeEditorEngine.canRedo
+        refreshCompositionFrame(at: currentTime)
+        clearLiveParameterEditFlagSoon()
+
+        if !didUpdateNatively {
+            refreshDisplay()
+        }
     }
 
     func setTrackSolo(_ trackId: UUID, solo: Bool) {
@@ -552,15 +564,26 @@ class TimelineEditorViewModel: ObservableObject {
         refreshDisplay()
     }
 
-    func setClipVolume(_ clipId: UUID, volume: Float) {
-        if nativeEditorEngine.setClipVolume(id: clipId, volume: volume) {
-            applyNativeSnapshotToSwiftTimeline()
-            refreshDisplay()
-            return
-        }
+    func previewClipVolume(_ clipId: UUID, volume: Float) {
+        liveClipVolumeOverrides[clipId] = max(volume, 0)
+        updateDisplayedClipVolume(clipId, volume: max(volume, 0))
+        refreshCompositionFrame(at: currentTime)
+    }
 
+    func commitClipVolume(_ clipId: UUID, volume: Float) {
+        liveClipVolumeOverrides.removeValue(forKey: clipId)
+        isPerformingLiveParameterEdit = true
         engine.setClipVolume(clipId, volume: volume)
-        refreshDisplay()
+        let didUpdateNatively = nativeEditorEngine.setClipVolume(id: clipId, volume: volume)
+        updateDisplayedClipVolume(clipId, volume: volume)
+        canUndo = nativeEditorEngine.canUndo
+        canRedo = nativeEditorEngine.canRedo
+        refreshCompositionFrame(at: currentTime)
+        clearLiveParameterEditFlagSoon()
+
+        if !didUpdateNatively {
+            refreshDisplay()
+        }
     }
 
     func setClipMuted(_ clipId: UUID, muted: Bool) {
@@ -676,6 +699,62 @@ class TimelineEditorViewModel: ObservableObject {
         refreshCompositionFrame(at: currentTime)
     }
 
+    private func refreshRealtimeAudioState(includeNativeSnapshot: Bool) {
+        nativeEditorEngine.configurePlayback(
+            frameRate: engine.timeline.settings.frameRate,
+            duration: engine.duration
+        )
+
+        if includeNativeSnapshot {
+            nativeTimelineSnapshot = nativeEditorEngine.timelineSnapshot()
+            duration = CMTime(seconds: nativeTimelineSnapshot.durationSeconds, preferredTimescale: 600)
+            tracks = displayTracks(from: nativeTimelineSnapshot)
+        } else {
+            duration = engine.duration
+            tracks = fallbackDisplayTracks()
+        }
+
+        canUndo = nativeEditorEngine.canUndo
+        canRedo = nativeEditorEngine.canRedo
+        refreshCompositionFrame(at: currentTime)
+    }
+
+    private func updateDisplayedClipVolume(_ clipId: UUID, volume: Float) {
+        tracks = tracks.map { track in
+            let updatedClips = track.clips.map { clip in
+                guard clip.id == clipId else { return clip }
+                return ClipDisplayModel(
+                    id: clip.id,
+                    type: clip.type,
+                    name: clip.name,
+                    volume: volume,
+                    startSeconds: clip.startSeconds,
+                    durationSeconds: clip.durationSeconds,
+                    sourceStartSeconds: clip.sourceStartSeconds,
+                    sourceDurationSeconds: clip.sourceDurationSeconds,
+                    sourcePath: clip.sourcePath,
+                    hasThumbnail: clip.hasThumbnail,
+                    showsEmbeddedWaveform: clip.showsEmbeddedWaveform
+                )
+            }
+
+            return TrackDisplayModel(
+                id: track.id,
+                type: track.type,
+                name: track.name,
+                clips: updatedClips,
+                isMuted: track.isMuted,
+                isLocked: track.isLocked
+            )
+        }
+    }
+
+    private func clearLiveParameterEditFlagSoon() {
+        DispatchQueue.main.async { [weak self] in
+            self?.isPerformingLiveParameterEdit = false
+        }
+    }
+
     private func applyTimelineOutputSettings(canvasSize: CGSize, frameRate: Int) {
         let currentTimeline = engine.timeline
         guard currentTimeline.settings.canvasSize != canvasSize ||
@@ -715,6 +794,7 @@ struct ClipDisplayModel: Identifiable {
     let id: UUID
     let type: TrackType
     let name: String
+    let volume: Float
     let startSeconds: Double
     let durationSeconds: Double
     let sourceStartSeconds: Double
@@ -739,6 +819,17 @@ private extension TimelineEditorViewModel {
             return "Clip"
         }
     }
+
+    func clipDisplayVolume(_ clip: any ClipProtocol) -> Float {
+        switch clip {
+        case let videoClip as VideoClip:
+            return videoClip.volume
+        case let audioClip as AudioClip:
+            return audioClip.volume
+        default:
+            return 1.0
+        }
+    }
     
     private func formatTime(_ time: CMTime) -> String {
         let totalSeconds = Int(time.seconds)
@@ -749,9 +840,44 @@ private extension TimelineEditorViewModel {
     }
 
     private func refreshCompositionFrame(at time: CMTime) {
-        compositionFrame = compositionEngine.evaluate(
+        let baseFrame = compositionEngine.evaluate(
             timeline: engine.timeline,
             at: time
+        )
+        compositionFrame = applyLiveClipVolumeOverrides(to: baseFrame)
+    }
+
+    private func applyLiveClipVolumeOverrides(to frame: CompositionFrame) -> CompositionFrame {
+        guard !liveClipVolumeOverrides.isEmpty else {
+            return frame
+        }
+
+        let audioClips = frame.audioClips.map { clip in
+            guard let overrideVolume = liveClipVolumeOverrides[clip.id] else {
+                return clip
+            }
+
+            return AudioClipSnapshot(
+                id: clip.id,
+                trackId: clip.trackId,
+                timelineRange: clip.timelineRange,
+                sourceStartSeconds: clip.sourceStartSeconds,
+                sourceTimeSeconds: clip.sourceTimeSeconds,
+                sourceURL: clip.sourceURL,
+                volume: overrideVolume,
+                trackVolume: clip.trackVolume,
+                effectiveVolume: max(overrideVolume * clip.trackVolume, 0),
+                isMuted: clip.isMuted,
+                isTrackSolo: clip.isTrackSolo
+            )
+        }
+
+        return CompositionFrame(
+            timelineTimeSeconds: frame.timelineTimeSeconds,
+            outputSize: frame.outputSize,
+            frameRate: frame.frameRate,
+            visualClips: frame.visualClips,
+            audioClips: audioClips
         )
     }
 
@@ -898,6 +1024,7 @@ private extension TimelineEditorViewModel {
                         id: nativeClip.id,
                         type: clipType,
                         name: nativeClip.name,
+                        volume: nativeClip.volume,
                         startSeconds: nativeClip.timelineStart,
                         durationSeconds: nativeClip.timelineDuration,
                         sourceStartSeconds: nativeClip.sourceStart,
@@ -922,7 +1049,13 @@ private extension TimelineEditorViewModel {
             return nativeTracks.sorted(by: displayTrackOrder)
         }
 
-        let fallbackTracks = engine.timeline.tracks.map { track in
+        let fallbackTracks = fallbackDisplayTracks()
+
+        return fallbackTracks.sorted(by: displayTrackOrder)
+    }
+
+    private func fallbackDisplayTracks() -> [TrackDisplayModel] {
+        engine.timeline.tracks.map { track in
             TrackDisplayModel(
                 id: track.id,
                 type: track.type,
@@ -932,6 +1065,7 @@ private extension TimelineEditorViewModel {
                         id: clip.id,
                         type: track.type,
                         name: clipName(clip),
+                        volume: clipDisplayVolume(clip),
                         startSeconds: clip.timelineRange.start.seconds,
                         durationSeconds: clip.timelineRange.duration.seconds,
                         sourceStartSeconds: clip.sourceRange.start.seconds,
@@ -945,8 +1079,6 @@ private extension TimelineEditorViewModel {
                 isLocked: track.isLocked
             )
         }
-
-        return fallbackTracks.sorted(by: displayTrackOrder)
     }
 
     private func displayTrackOrder(lhs: TrackDisplayModel, rhs: TrackDisplayModel) -> Bool {

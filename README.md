@@ -7,10 +7,10 @@ frameworks.
 ## Current Progress
 - Timeline UI and interaction model: `78%`
 - Preview/video engine path: `62%`
-- Audio engine path: `48%`
-- Waveform analysis path: `72%`
-- Native timeline bridge parity: `58%`
-- End-to-end editor happy flow: `68%`
+- Audio engine path: `60%`
+- Waveform analysis path: `80%`
+- Native timeline bridge parity: `66%`
+- End-to-end editor happy flow: `78%`
 
 Current blocker:
 - Audible playback from the new native audio path is not verified yet on device.
@@ -18,6 +18,7 @@ Current blocker:
 Quick references:
 - [ROADMAP.md](ROADMAP.md)
 - [AUDIO_ENGINE_PLAN.md](AUDIO_ENGINE_PLAN.md)
+- [ENGINEERING_GUARDRAILS.md](ENGINEERING_GUARDRAILS.md)
 
 ## Platforms
 - Android: MediaExtractor + MediaCodec + MediaMuxer
@@ -43,6 +44,7 @@ Quick references:
 - When a clip is selected, that same bottom tool strip switches to contextual clip tools.
 - In clip-tool mode, the leading `Back` button clears selection and returns the strip to the main tool set.
 - Tapping empty timeline space clears selection and returns the bottom tool strip to the main tool set.
+- Real-time controls such as clip `Volume` should use preview-only UI state while dragging and commit the final value on release.
 
 ## Timeline Media Ownership
 - Before audio extraction, a video clip may show its embedded audio waveform inside the main video lane.

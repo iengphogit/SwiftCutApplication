@@ -23,6 +23,9 @@ struct TimelineEditorScreen: View {
     @State private var requestedTimelineScrollOffsetX: CGFloat?
     @State private var isRatioPanelVisible = false
     @State private var isUhdPanelVisible = false
+    @State private var toolStripMode: ToolStripMode = .main
+    @State private var clipVolumeDraft: Double = 1
+    @State private var isAdjustingClipVolume = false
     @State private var selectedRatio: AspectRatio
     @State private var selectedResolution: UhdResolution
     @State private var selectedFrameRate: UhdFrameRate
@@ -117,6 +120,14 @@ struct TimelineEditorScreen: View {
                     viewModel.toast = nil
                 }
             }
+        }
+        .onChange(of: selectedClipId) { _, newValue in
+            guard newValue != nil else {
+                toolStripMode = .main
+                return
+            }
+            toolStripMode = .main
+            clipVolumeDraft = Double(selectedClip?.volume ?? 1)
         }
     }
 
@@ -395,6 +406,8 @@ struct TimelineEditorScreen: View {
                     TimelineHorizontalScrollView(
                         currentTime: max(viewModel.currentTime.seconds, 0),
                         isPlaying: viewModel.isPlaying,
+                        suspendAutoScrollSync: isAdjustingClipVolume && !viewModel.isPlaying,
+                        suspendContentUpdates: isAdjustingClipVolume,
                         contentWidth: hostedTimelineWidth,
                         zoomScale: zoomScale,
                         pointsPerSecond: 60 * zoomScale,
@@ -652,7 +665,7 @@ struct TimelineEditorScreen: View {
             zoomScale: zoomScale,
             selectedClipId: $selectedClipId,
             onClipTap: { clipId in
-                selectedClipId = selectedClipId == clipId ? nil : clipId
+                selectedClipId = clipId
             },
             onBackgroundTap: {
                 selectedClipId = nil
@@ -732,6 +745,16 @@ struct TimelineEditorScreen: View {
     }
     
     private var bottomToolStrip: some View {
+        Group {
+            if case .clipVolume = toolStripMode, selectedClip != nil {
+                volumeToolStrip
+            } else {
+                defaultToolStrip
+            }
+        }
+    }
+
+    private var defaultToolStrip: some View {
         HStack(spacing: 0) {
             if let leadingToolStripItem {
                 TimelineBottomToolButton(
@@ -762,6 +785,45 @@ struct TimelineEditorScreen: View {
         .background(Color(white: 0.1))
     }
 
+    private var volumeToolStrip: some View {
+        HStack(spacing: 12) {
+            TimelineBottomToolButton(
+                icon: "chevron.left",
+                title: "Back",
+                isLoading: false,
+                isEnabled: true,
+                action: { toolStripMode = .main }
+            )
+
+            Slider(
+                value: Binding(
+                    get: { clipVolumeDraft },
+                    set: { newValue in
+                        let resolved = min(max(newValue, 0), 1)
+                        clipVolumeDraft = resolved
+                        guard let selectedClipId else { return }
+                        viewModel.previewClipVolume(selectedClipId, volume: Float(resolved))
+                    }
+                ),
+                in: 0...1,
+                onEditingChanged: { isEditing in
+                    isAdjustingClipVolume = isEditing
+                    guard !isEditing, let selectedClipId else { return }
+                    viewModel.commitClipVolume(selectedClipId, volume: Float(clipVolumeDraft))
+                }
+            )
+            .tint(Color.orange.opacity(0.92))
+
+            Text(volumePercentLabel)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white.opacity(0.88))
+                .frame(width: 48, alignment: .trailing)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color(white: 0.1))
+    }
+
     private var selectedClip: ClipDisplayModel? {
         guard let selectedClipId else { return nil }
         return viewModel.tracks
@@ -781,7 +843,9 @@ struct TimelineEditorScreen: View {
         switch selectedClip.type {
         case .video:
             items.append(
-                BottomBarItem(id: "volume", icon: "speaker.wave.2", title: "Volume") {}
+                BottomBarItem(id: "volume", icon: "speaker.wave.2", title: "Volume") {
+                    openClipVolumeTool()
+                }
             )
             items.append(
                 BottomBarItem(id: "crop", icon: "crop", title: "Crop") {}
@@ -803,7 +867,9 @@ struct TimelineEditorScreen: View {
             }
         case .audio:
             items.append(
-                BottomBarItem(id: "volume", icon: "speaker.wave.2", title: "Volume") {}
+                BottomBarItem(id: "volume", icon: "speaker.wave.2", title: "Volume") {
+                    openClipVolumeTool()
+                }
             )
         case .text:
             items.append(
@@ -840,6 +906,7 @@ struct TimelineEditorScreen: View {
     private var leadingToolStripItem: BottomBarItem? {
         if selectedClip != nil {
             return BottomBarItem(id: "back-to-main", icon: "chevron.left", title: "Back") {
+                toolStripMode = .main
                 selectedClipId = nil
             }
         }
@@ -987,6 +1054,21 @@ struct TimelineEditorScreen: View {
         }
         return viewModel.canExtractAudio(from: selectedClipId)
     }
+
+    private var volumePercentLabel: String {
+        "\(Int((clipVolumeDraft * 100).rounded()))%"
+    }
+
+    private func openClipVolumeTool() {
+        guard let selectedClip else { return }
+        clipVolumeDraft = Double(selectedClip.volume)
+        toolStripMode = .clipVolume
+    }
+}
+
+private enum ToolStripMode: Equatable {
+    case main
+    case clipVolume
 }
 
 private extension View {
@@ -1046,6 +1128,8 @@ private struct BottomBarItem: Identifiable {
 private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable {
     let currentTime: Double
     let isPlaying: Bool
+    let suspendAutoScrollSync: Bool
+    let suspendContentUpdates: Bool
     let contentWidth: CGFloat
     let zoomScale: CGFloat
     let pointsPerSecond: CGFloat
@@ -1063,6 +1147,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
     init(
         currentTime: Double,
         isPlaying: Bool,
+        suspendAutoScrollSync: Bool,
+        suspendContentUpdates: Bool,
         contentWidth: CGFloat,
         zoomScale: CGFloat,
         pointsPerSecond: CGFloat,
@@ -1079,6 +1165,8 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
     ) {
         self.currentTime = currentTime
         self.isPlaying = isPlaying
+        self.suspendAutoScrollSync = suspendAutoScrollSync
+        self.suspendContentUpdates = suspendContentUpdates
         self.contentWidth = contentWidth
         self.zoomScale = zoomScale
         self.pointsPerSecond = pointsPerSecond
@@ -1149,7 +1237,7 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
     }
 
     func updateUIView(_ uiView: UIScrollView, context: Context) {
-        if context.coordinator.isUserInteracting || context.coordinator.isPinchZooming {
+        if suspendContentUpdates || context.coordinator.isUserInteracting || context.coordinator.isPinchZooming {
             context.coordinator.pendingRootView = content
         } else {
             context.coordinator.hostingController.rootView = content
@@ -1212,6 +1300,10 @@ private struct TimelineHorizontalScrollView<Content: View>: UIViewRepresentable 
                     onZoomAnchorConsumed()
                 }
             }
+            return
+        }
+
+        guard !suspendAutoScrollSync else {
             return
         }
 

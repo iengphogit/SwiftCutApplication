@@ -17,8 +17,11 @@ struct CompositionEngine: CompositionEngineProtocol {
 
         let audioClips = timeline.tracks
             .filter { track in
-                guard track.type == .audio, !track.isMuted else {
+                guard (track.type == .audio || track.type == .video), !track.isMuted else {
                     return false
+                }
+                if track.type == .video {
+                    return !hasSoloAudioTrack
                 }
                 return !hasSoloAudioTrack || track.isSolo
             }
@@ -53,22 +56,43 @@ private extension CompositionEngine {
         track.clips
             .filter { $0.isEnabled && $0.timelineRange.containsTime(time) }
             .compactMap { clip in
-                guard let audioClip = clip as? AudioClip else {
+                if let audioClip = clip as? AudioClip {
+                    return AudioClipSnapshot(
+                        id: audioClip.id,
+                        trackId: track.id,
+                        timelineRange: audioClip.timelineRange,
+                        sourceStartSeconds: audioClip.sourceRange.start.seconds,
+                        sourceTimeSeconds: sourceTime(for: audioClip, timelineTime: time).seconds,
+                        sourceURL: audioClip.sourceUrl,
+                        volume: audioClip.volume,
+                        trackVolume: track.volume,
+                        effectiveVolume: max(audioClip.volume * track.volume, 0),
+                        isMuted: track.isMuted,
+                        isTrackSolo: track.isSolo
+                    )
+                }
+
+                guard let videoClip = clip as? VideoClip else {
+                    return nil
+                }
+
+                // Before extraction, embedded audio belongs to the video clip.
+                guard videoClip.linkedClipGroupId == nil, !videoClip.isMuted else {
                     return nil
                 }
 
                 return AudioClipSnapshot(
-                    id: audioClip.id,
+                    id: videoClip.id,
                     trackId: track.id,
-                    timelineRange: audioClip.timelineRange,
-                    sourceStartSeconds: audioClip.sourceRange.start.seconds,
-                    sourceTimeSeconds: sourceTime(for: audioClip, timelineTime: time).seconds,
-                    sourceURL: audioClip.sourceUrl,
-                    volume: audioClip.volume,
+                    timelineRange: videoClip.timelineRange,
+                    sourceStartSeconds: videoClip.sourceRange.start.seconds,
+                    sourceTimeSeconds: sourceTime(for: videoClip, timelineTime: time).seconds,
+                    sourceURL: videoClip.sourceUrl,
+                    volume: videoClip.volume,
                     trackVolume: track.volume,
-                    effectiveVolume: max(audioClip.volume * track.volume, 0),
+                    effectiveVolume: max(videoClip.volume * track.volume, 0),
                     isMuted: track.isMuted,
-                    isTrackSolo: track.isSolo
+                    isTrackSolo: false
                 )
             }
     }

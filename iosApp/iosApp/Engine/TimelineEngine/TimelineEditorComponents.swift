@@ -274,6 +274,13 @@ struct TrackLaneView: View {
                     Rectangle()
                         .stroke(Color.white.opacity(0.05), lineWidth: 1)
                 )
+                .contentShape(Rectangle())
+                .gesture(
+                    TapGesture().onEnded {
+                        onBackgroundTap()
+                    },
+                    including: .gesture
+                )
 
             ForEach(track.clips) { clip in
                 TimelineClipItemView(
@@ -315,10 +322,6 @@ struct TrackLaneView: View {
             Rectangle()
                 .fill(Color(white: 0.11))
         )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onBackgroundTap()
-        }
         .overlay(
             Rectangle()
                 .stroke(Color.white.opacity(0.05), lineWidth: 1)
@@ -363,10 +366,12 @@ private struct TimelineClipItemView: View {
                 expandsVideoAudio: expandsVideoAudio
             )
             .contentShape(Rectangle())
-            .onTapGesture {
-                guard !isMoveGestureActive, !isLeadingTrimActive, !isTrailingTrimActive else { return }
-                onTap()
-            }
+            .highPriorityGesture(
+                TapGesture().onEnded {
+                    guard !isMoveGestureActive, !isLeadingTrimActive, !isTrailingTrimActive else { return }
+                    onTap()
+                }
+            )
             .modifier(ConditionalMoveGestureModifier(
                 isEnabled: canMove && isSelected,
                 moveGesture: moveGesture
@@ -631,12 +636,14 @@ private struct ClipView: View {
     let zoomScale: CGFloat
     let isSelected: Bool
     let expandsVideoAudio: Bool
-
-    @State private var showsEmbeddedAudio = false
     
     var body: some View {
         ZStack(alignment: .leading) {
-            clipBackground
+            ClipVisualContent(
+                clip: clip,
+                expandsVideoAudio: expandsVideoAudio
+            )
+            .equatable()
 
             HStack(spacing: 6) {
                 clipLeadingVisual
@@ -657,15 +664,16 @@ private struct ClipView: View {
         .clipShape(Rectangle())
         .overlay(
             Rectangle()
-                .stroke(isSelected ? Color.orange.opacity(0.85) : Color.clear, lineWidth: 2)
+                .stroke(Color.orange.opacity(0.85), lineWidth: 2)
+                .opacity(isSelected ? 1 : 0)
+                .allowsHitTesting(false)
         )
-        .task(id: "\(clip.type)-\(clip.sourcePath)-\(clip.showsEmbeddedWaveform)") {
-            guard clip.type == .video, expandsVideoAudio, clip.showsEmbeddedWaveform else {
-                showsEmbeddedAudio = false
-                return
-            }
-            showsEmbeddedAudio = await TimelineClipVisualCache.hasAudioTrack(for: clip.sourcePath)
-        }
+        .animation(
+            isSelected
+                ? .easeOut(duration: 0.1)
+                : .easeOut(duration: 0.1),
+            value: isSelected
+        )
     }
 
     @ViewBuilder
@@ -675,7 +683,7 @@ private struct ClipView: View {
             AudioWaveformStrip(sourcePath: clip.sourcePath)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 7)
-        case .video where expandsVideoAudio && clip.showsEmbeddedWaveform && showsEmbeddedAudio:
+        case .video where expandsVideoAudio && clip.showsEmbeddedWaveform:
             VStack(spacing: 1) {
                 TimelineClipThumbnailStrip(
                     sourcePath: clip.sourcePath,
@@ -756,11 +764,77 @@ private struct ClipView: View {
     }
 
     private var clipHeight: CGFloat {
-        clip.type == .video && expandsVideoAudio && clip.showsEmbeddedWaveform && showsEmbeddedAudio ? 56 : 36
+        clip.type == .video && expandsVideoAudio && clip.showsEmbeddedWaveform ? 56 : 36
     }
 
     private var overlayTopPadding: CGFloat {
-        clip.type == .video && expandsVideoAudio && clip.showsEmbeddedWaveform && showsEmbeddedAudio ? 2 : 0
+        clip.type == .video && expandsVideoAudio && clip.showsEmbeddedWaveform ? 2 : 0
+    }
+}
+
+private struct ClipVisualContent: View, Equatable {
+    let clip: ClipDisplayModel
+    let expandsVideoAudio: Bool
+
+    static func == (lhs: ClipVisualContent, rhs: ClipVisualContent) -> Bool {
+        lhs.clip.id == rhs.clip.id &&
+        lhs.clip.type == rhs.clip.type &&
+        lhs.clip.sourcePath == rhs.clip.sourcePath &&
+        lhs.clip.durationSeconds == rhs.clip.durationSeconds &&
+        lhs.clip.showsEmbeddedWaveform == rhs.clip.showsEmbeddedWaveform &&
+        lhs.expandsVideoAudio == rhs.expandsVideoAudio
+    }
+
+    var body: some View {
+        switch clip.type {
+        case .audio:
+            AudioWaveformStrip(sourcePath: clip.sourcePath)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 7)
+        case .video where expandsVideoAudio && clip.showsEmbeddedWaveform:
+            VStack(spacing: 1) {
+                TimelineClipThumbnailStrip(
+                    sourcePath: clip.sourcePath,
+                    durationSeconds: clip.durationSeconds
+                )
+                .frame(height: 34)
+
+                AudioWaveformStrip(sourcePath: clip.sourcePath)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .frame(height: 21)
+                    .background(Color.black.opacity(0.18))
+            }
+            .overlay(
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.04),
+                        Color.black.opacity(0.24)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+        case .video, .overlay:
+            TimelineClipThumbnailStrip(
+                sourcePath: clip.sourcePath,
+                durationSeconds: clip.durationSeconds
+            )
+            .overlay(
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.08),
+                        Color.black.opacity(0.36)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+        case .text:
+            Color.orange.opacity(0.18)
+        case .effect:
+            Color.pink.opacity(0.18)
+        }
     }
 }
 
@@ -770,24 +844,34 @@ struct TimelineClipThumbnailStrip: View {
 
     @State private var images: [UIImage] = []
 
+    init(sourcePath: String, durationSeconds: Double) {
+        self.sourcePath = sourcePath
+        self.durationSeconds = durationSeconds
+        _images = State(initialValue: TimelineClipVisualCache.cachedThumbnailStrip(
+            for: sourcePath,
+            durationSeconds: durationSeconds
+        ))
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let thumbnailCount = max(Int(geometry.size.width / 44), 1)
+            let displayImages = resolvedDisplayImages(for: thumbnailCount)
 
             ZStack {
-                if images.isEmpty {
+                if displayImages.isEmpty {
                     Color.white.opacity(0.12)
                     Image(systemName: "film")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.white.opacity(0.8))
                 } else {
                     HStack(spacing: 0) {
-                        ForEach(Array(images.enumerated()), id: \.offset) { _, image in
+                        ForEach(Array(displayImages.enumerated()), id: \.offset) { _, image in
                             Image(uiImage: image)
                                 .resizable()
                                 .scaledToFill()
                                 .frame(
-                                    width: max(geometry.size.width / CGFloat(images.count), 1),
+                                    width: max(geometry.size.width / CGFloat(displayImages.count), 1),
                                     height: geometry.size.height
                                 )
                                 .clipped()
@@ -805,12 +889,6 @@ struct TimelineClipThumbnailStrip: View {
 
     @MainActor
     private func loadImages(thumbnailCount: Int) async {
-        if let posterFrame = await TimelineClipVisualCache.thumbnail(for: sourcePath) {
-            images = [posterFrame]
-        } else {
-            images = []
-        }
-
         let strip = await TimelineClipVisualCache.thumbnailStrip(
             for: sourcePath,
             durationSeconds: durationSeconds,
@@ -819,7 +897,21 @@ struct TimelineClipThumbnailStrip: View {
 
         if !strip.isEmpty {
             images = strip
+        } else if images.isEmpty, let posterFrame = await TimelineClipVisualCache.thumbnail(for: sourcePath) {
+            images = [posterFrame]
         }
+
+        TimelineClipVisualCache.storeThumbnailStrip(
+            strip.isEmpty ? images : strip,
+            for: sourcePath,
+            durationSeconds: durationSeconds
+        )
+    }
+
+    private func resolvedDisplayImages(for thumbnailCount: Int) -> [UIImage] {
+        guard !images.isEmpty else { return [] }
+        guard images.count < thumbnailCount, let firstImage = images.first else { return images }
+        return Array(repeating: firstImage, count: thumbnailCount)
     }
 }
 
@@ -827,6 +919,11 @@ struct AudioWaveformStrip: View {
     let sourcePath: String
 
     @State private var samples: [CGFloat] = []
+
+    init(sourcePath: String) {
+        self.sourcePath = sourcePath
+        _samples = State(initialValue: TimelineClipVisualCache.cachedWaveform(for: sourcePath))
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -853,6 +950,7 @@ struct AudioWaveformStrip: View {
                     for: sourcePath,
                     targetBarCount: targetBarCount
                 )
+                TimelineClipVisualCache.storeWaveform(samples, for: sourcePath)
             }
         }
     }
@@ -861,6 +959,8 @@ struct AudioWaveformStrip: View {
 private enum TimelineClipVisualCache {
     private static let videoEngine: NativeVideoEngineProtocol = NativeVideoEngine.shared
     private static let audioEngine: NativeAudioEngineProtocol = NativeAudioEngine.shared
+    private static let thumbnailStripCache = NSCache<NSString, NSArray>()
+    private static let waveformCache = NSCache<NSString, NSArray>()
 
     static func thumbnail(for sourcePath: String) async -> UIImage? {
         await videoEngine.thumbnail(for: sourcePath)
@@ -871,22 +971,53 @@ private enum TimelineClipVisualCache {
         durationSeconds: Double,
         frameCount: Int
     ) async -> [UIImage] {
-        await videoEngine.thumbnailStrip(
+        let images = await videoEngine.thumbnailStrip(
             for: sourcePath,
             durationSeconds: durationSeconds,
             frameCount: frameCount
         )
+        storeThumbnailStrip(images, for: sourcePath, durationSeconds: durationSeconds)
+        return images
     }
 
     static func waveform(for sourcePath: String, targetBarCount: Int) async -> [CGFloat] {
-        await audioEngine.waveformSamples(
+        let samples = await audioEngine.waveformSamples(
             for: sourcePath,
             targetBarCount: targetBarCount
         )
+        storeWaveform(samples, for: sourcePath)
+        return samples
     }
 
     static func hasAudioTrack(for sourcePath: String) async -> Bool {
         await audioEngine.hasAudioTrack(for: sourcePath)
+    }
+
+    static func cachedThumbnailStrip(for sourcePath: String, durationSeconds: Double) -> [UIImage] {
+        let directKey = "\(sourcePath)#\(Int(durationSeconds * 100))" as NSString
+        if let cached = thumbnailStripCache.object(forKey: directKey) as? [UIImage] {
+            return cached
+        }
+        return []
+    }
+
+    static func storeThumbnailStrip(_ images: [UIImage], for sourcePath: String, durationSeconds: Double) {
+        guard !images.isEmpty else { return }
+        let directKey = "\(sourcePath)#\(Int(durationSeconds * 100))" as NSString
+        thumbnailStripCache.setObject(images as NSArray, forKey: directKey)
+    }
+
+    static func cachedWaveform(for sourcePath: String) -> [CGFloat] {
+        let key = sourcePath as NSString
+        if let cached = waveformCache.object(forKey: key) as? [NSNumber] {
+            return cached.map { CGFloat(truncating: $0) }
+        }
+        return []
+    }
+
+    static func storeWaveform(_ samples: [CGFloat], for sourcePath: String) {
+        guard !samples.isEmpty else { return }
+        waveformCache.setObject(samples.map { NSNumber(value: Double($0)) } as NSArray, forKey: sourcePath as NSString)
     }
 }
 
